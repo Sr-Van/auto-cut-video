@@ -1,0 +1,14 @@
+skills-lock.json
+context.md
+plan.md
+.env
+.agents
+
+__pycache__/
+*.pyc
+output/
+*.wav
+*.mp3
+.venv/
+venv/
+env/

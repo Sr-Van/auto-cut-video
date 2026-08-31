@@ -1,0 +1,4 @@
+PySide6
+faster-whisper
+google-genai
+python-dotenv
