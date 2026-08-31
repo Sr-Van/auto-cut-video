@@ -1,3 +1,4 @@
+import tempfile
 from pathlib import Path
 
 from core import ai_analyzer, audio, transcriber, video_ops
@@ -10,16 +11,18 @@ def _emit(progress_callback, stage, percent, message):
         progress_callback(stage, percent, message)
 
 
-def run(video_path, progress_callback=None):
+def run(video_path, output_dir=None, progress_callback=None):
     video_path = str(video_path)
     video_stem = Path(video_path).stem
-    out_dir = OUTPUT_DIR / video_stem
+    out_root = Path(output_dir) if output_dir else OUTPUT_DIR
+    out_dir = out_root / video_stem
 
-    _emit(progress_callback, "audio", 5, "Extraindo audio...")
-    audio_path = audio.extract_audio(video_path)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        _emit(progress_callback, "audio", 5, "Extraindo audio...")
+        audio_path = audio.extract_audio(video_path, tmp_dir)
 
-    _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
-    segments = transcriber.transcribe(audio_path)
+        _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
+        segments = transcriber.transcribe(audio_path)
 
     if segments:
         _emit(progress_callback, "analise", 50, "Analisando com Gemini...")

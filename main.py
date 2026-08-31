@@ -1,14 +1,15 @@
-import core.config as config
+import sys
+
+from PySide6.QtWidgets import QApplication
+
+from gui.main_window import MainWindow
 
 
 def main():
-    print("API_KEY:", "carregada" if config.API_KEY else "vazia")
-    print("MODELO_GEMINI:", config.MODELO_GEMINI)
-    print("WHISPER_MODEL:", config.WHISPER_MODEL)
-    print("TEMPERATURA:", config.TEMPERATURA)
-    print("PADDING_S:", config.PADDING_S)
-    print("LANGUAGE:", config.LANGUAGE)
-    print("OUTPUT_DIR:", config.OUTPUT_DIR)
+    app = QApplication(sys.argv)
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
 
 
 if __name__ == "__main__":

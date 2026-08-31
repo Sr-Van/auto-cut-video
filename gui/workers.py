@@ -9,9 +9,10 @@ class PipelineWorker(QThread):
     finished = Signal(object)
     failed = Signal(str)
 
-    def __init__(self, video_path, parent=None):
+    def __init__(self, video_path, output_dir=None, parent=None):
         super().__init__(parent)
         self.video_path = video_path
+        self.output_dir = output_dir
 
     def run(self):
         try:
@@ -19,7 +20,7 @@ class PipelineWorker(QThread):
                 self.stage_changed.emit(stage)
                 self.progress.emit(percent)
 
-            result = run(self.video_path, progress_callback=on_progress)
+            result = run(self.video_path, output_dir=self.output_dir, progress_callback=on_progress)
             self.finished.emit(result)
         except Exception as exc:
             self.failed.emit(str(exc))
