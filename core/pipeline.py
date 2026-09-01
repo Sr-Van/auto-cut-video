@@ -2,7 +2,8 @@ import tempfile
 from pathlib import Path
 
 from core import ai_analyzer, audio, transcriber, video_ops
-from core.config import OUTPUT_DIR
+from core.config import MAX_CLIP_DURATION, MIN_CLIP_DURATION, OUTPUT_DIR, PAUSE_GAP
+from utils.normalize import normalize_clips
 from utils.report import save_report
 
 
@@ -30,8 +31,18 @@ def run(video_path, output_dir=None, progress_callback=None):
     else:
         clips = []
 
-    _emit(progress_callback, "corte", 70, "Cortando clipes...")
+    _emit(progress_callback, "normalizacao", 65, "Ajustando duracao dos clipes...")
     total_duration = video_ops.get_duration(video_path)
+    clips = normalize_clips(
+        clips,
+        segments,
+        total_duration,
+        MIN_CLIP_DURATION,
+        MAX_CLIP_DURATION,
+        PAUSE_GAP,
+    )
+
+    _emit(progress_callback, "corte", 70, "Cortando clipes...")
     clip_paths = video_ops.cut_all(video_path, clips, total_duration, out_dir)
 
     _emit(progress_callback, "relatorio", 95, "Gerando relatorio...")
