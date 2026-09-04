@@ -1,7 +1,7 @@
 import tempfile
 from pathlib import Path
 
-from core import ai_analyzer, audio, transcriber, video_ops
+from core import ai_analyzer, audio, transcriber, video_ops, downloader
 from core.config import MAX_CLIP_DURATION, MIN_CLIP_DURATION, OUTPUT_DIR, PAUSE_GAP
 from utils.normalize import normalize_clips
 from utils.report import save_report
@@ -12,7 +12,10 @@ def _emit(progress_callback, stage, percent, message):
         progress_callback(stage, percent, message)
 
 
-def run(video_path, output_dir=None, progress_callback=None):
+def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None):
+    if yt_link:
+        video_path = downloader.download_video(yt_link, diretorio_saida=output_dir)
+    
     video_path = str(video_path)
     video_stem = Path(video_path).stem
     out_root = Path(output_dir) if output_dir else OUTPUT_DIR
@@ -24,6 +27,7 @@ def run(video_path, output_dir=None, progress_callback=None):
 
         _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
         segments = transcriber.transcribe(audio_path)
+
 
     if segments:
         _emit(progress_callback, "analise", 50, "Analisando com Gemini...")
@@ -57,12 +61,8 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
-        print("Uso: python -m core.pipeline <video>")
         raise SystemExit(1)
 
     def cb(stage, percent, message):
-        print(f"[{percent:3d}%] {stage}: {message}")
 
     result = run(sys.argv[1], progress_callback=cb)
-    print("Clipes:", len(result["clip_paths"]))
-    print("Relatorio:", result["report_path"])

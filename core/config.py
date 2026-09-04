@@ -9,8 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "output"
 
 API_KEY = os.getenv("API_KEY", "")
-MODELO_GEMINI = "gemini-2.5-flash"
-WHISPER_MODEL = "medium"
+MODELO_GEMINI = "gemini-3.6-flash"
+WHISPER_MODEL = "large"
 TEMPERATURA = 0.3
 PADDING_S = 5
 MIN_CLIP_DURATION = 30

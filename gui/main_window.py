@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
+    QLineEdit
 )
 
 from core.config import OUTPUT_DIR
@@ -27,11 +28,14 @@ class MainWindow(QMainWindow):
         self.settings = QSettings("AutoCortesBR", "AutoCortesBR")
         self.output_dir = self.settings.value("last_output_dir", str(OUTPUT_DIR))
 
+        self.video_link = QLineEdit()
+        self.video_link.setPlaceholderText("Cole o link do video aqui")
+
         self.select_button = QPushButton("Selecionar video")
         self.select_button.clicked.connect(self.select_video)
 
         self.process_button = QPushButton("Processar")
-        self.process_button.setEnabled(False)
+        #self.process_button.setEnabled(False)
         self.process_button.clicked.connect(self.process)
 
         self.output_button = QPushButton("Escolher pasta")
@@ -53,6 +57,7 @@ class MainWindow(QMainWindow):
         self.log_view.setReadOnly(True)
 
         button_row = QHBoxLayout()
+        button_row.addWidget(self.video_link)
         button_row.addWidget(self.select_button)
         button_row.addWidget(self.process_button)
 
@@ -79,7 +84,7 @@ class MainWindow(QMainWindow):
         if file_path:
             self.video_path = file_path
             self.path_label.setText(file_path)
-            self.process_button.setEnabled(True)
+            #self.process_button.setEnabled(True)
 
     def select_output_dir(self):
         folder = QFileDialog.getExistingDirectory(
@@ -95,7 +100,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(0)
         self.log_view.clear()
 
-        self.worker = PipelineWorker(self.video_path, output_dir=self.output_dir)
+        self.worker = PipelineWorker(yt_link=self.video_link.text(), video_path=self.video_path, output_dir=self.output_dir)
         self.worker.stage_changed.connect(self.on_stage)
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.finished.connect(self.on_finished)
