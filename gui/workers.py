@@ -6,6 +6,7 @@ from core.pipeline import run
 class PipelineWorker(QThread):
     progress = Signal(int)
     stage_changed = Signal(str)
+    message = Signal(str)
     finished = Signal(object)
     failed = Signal(str)
 
@@ -17,9 +18,10 @@ class PipelineWorker(QThread):
 
     def run(self):
         try:
-            def on_progress(stage, percent, message):
+            def on_progress(stage, percent, msg):
                 self.stage_changed.emit(stage)
                 self.progress.emit(percent)
+                self.message.emit(f"[{percent:3d}%] {stage}: {msg}")
 
             result = run(self.yt_link, self.video_path, output_dir=self.output_dir, progress_callback=on_progress)
             self.finished.emit(result)

@@ -13,16 +13,36 @@ def _emit(progress_callback, stage, percent, message):
 
 
 def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None):
+    if not yt_link and not video_path:
+        raise ValueError("Informe yt_link ou video_path.")
+
     if yt_link:
-        video_path = downloader.download_video(yt_link, diretorio_saida=output_dir)
-    
+        _emit(progress_callback, "baixando", 0, "Baixando video...")
+
+        last_scaled = [0]
+
+        def download_progress(stage, percent, message):
+            scaled = int(percent * 0.1)
+            if scaled == last_scaled[0]:
+                return
+            last_scaled[0] = scaled
+            _emit(progress_callback, stage, scaled, message)
+
+        video_path = downloader.download_video(
+            yt_link,
+            diretorio_saida=output_dir or str(OUTPUT_DIR),
+            progress_callback=download_progress if progress_callback else None,
+        )
+        if not video_path:
+            raise RuntimeError("Falha ao baixar o video.")
+
     video_path = str(video_path)
     video_stem = Path(video_path).stem
     out_root = Path(output_dir) if output_dir else OUTPUT_DIR
     out_dir = out_root / video_stem
 
     with tempfile.TemporaryDirectory() as tmp_dir:
-        _emit(progress_callback, "audio", 5, "Extraindo audio...")
+        _emit(progress_callback, "audio", 15, "Extraindo audio...")
         audio_path = audio.extract_audio(video_path, tmp_dir)
 
         _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
@@ -57,12 +77,29 @@ def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None):
     return {"clips": clips, "clip_paths": clip_paths, "report_path": report_path}
 
 
+def _cli_progress(stage, percent, message):
+    print(f"[{percent:3d}%] {stage}: {message}", flush=True)
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) != 2:
+        print("Uso: python -m core.pipeline <video|url>")
         raise SystemExit(1)
 
-    def cb(stage, percent, message):
+    alvo = sys.argv[1]
+    entrada = ({"yt_link": alvo} if alvo.startswith(("http://", "https://"))
+               else {"video_path": alvo})
 
-    result = run(sys.argv[1], progress_callback=cb)
+    try:
+        result = run(progress_callback=_cli_progress, **entrada)
+    except Exception as exc:
+        print(f"Erro: {exc}", file=sys.stderr, flush=True)
+        raise SystemExit(1)
+
+    print()
+    print(f"Clipes gerados: {len(result['clip_paths'])}")
+    for path in result["clip_paths"]:
+        print(f"  {path}")
+    print(f"Relatorio: {result['report_path']}")

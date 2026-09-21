@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from core.config import OUTPUT_DIR
 from gui.workers import PipelineWorker
 
+LOG_MAX_LINES = 500
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -55,6 +57,7 @@ class MainWindow(QMainWindow):
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(LOG_MAX_LINES)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.video_link)
@@ -103,6 +106,7 @@ class MainWindow(QMainWindow):
         self.worker = PipelineWorker(yt_link=self.video_link.text(), video_path=self.video_path, output_dir=self.output_dir)
         self.worker.stage_changed.connect(self.on_stage)
         self.worker.progress.connect(self.progress_bar.setValue)
+        self.worker.message.connect(self.on_log)
         self.worker.finished.connect(self.on_finished)
         self.worker.failed.connect(self.on_failed)
         self.worker.start()
@@ -114,6 +118,12 @@ class MainWindow(QMainWindow):
 
     def on_stage(self, stage):
         self.stage_label.setText(stage)
+
+    def on_log(self, line):
+        self.log_view.appendPlainText(line)
+        self.log_view.verticalScrollBar().setValue(
+            self.log_view.verticalScrollBar().maximum()
+        )
 
     def on_finished(self, result):
         self.set_busy(False)
@@ -135,4 +145,5 @@ class MainWindow(QMainWindow):
     def on_failed(self, error):
         self.set_busy(False)
         self.stage_label.setText("Erro")
+        self.log_view.appendPlainText(f"[ERRO] {error}")
         QMessageBox.critical(self, "Erro", error)
