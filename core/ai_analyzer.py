@@ -1,9 +1,21 @@
 import json
+import random
+import time
 
+import httpx
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 
-from core.config import API_KEY, MODELO_GEMINI, TEMPERATURA
+from core.config import (
+    API_KEY,
+    GEMINI_BACKOFF_BASE,
+    GEMINI_BACKOFF_MAX,
+    GEMINI_MAX_ATTEMPTS,
+    GEMINI_TIMEOUT_S,
+    MODELO_GEMINI,
+    TEMPERATURA,
+)
 from utils.timefmt import seconds_to_hhmmss
 
 RULES = """
@@ -70,20 +82,87 @@ def build_transcript_block(segments) -> str:
     return "\n".join(lines)
 
 
-def analyze(segments) -> list[dict]:
-    client = genai.Client(api_key=API_KEY)
-    block = build_transcript_block(segments)
+RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+RETRYABLE_EXCEPTIONS = (
+    httpx.TimeoutException,
+    httpx.TransportError,
+    ConnectionError,
+    TimeoutError,
+)
 
-    response = client.models.generate_content(
-        model=MODELO_GEMINI,
-        config=types.GenerateContentConfig(
-            system_instruction=RULES,
-            temperature=TEMPERATURA,
-            response_mime_type="application/json",
-            response_schema=SCHEMA,
-        ),
-        contents=block,
+
+def _emit_retry(progress_callback, message, percent=50):
+    if progress_callback:
+        progress_callback("analise", percent, message)
+
+
+def _retry_after_seconds(exc):
+    """Le o header Retry-After, se presente (ex.: 429)."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_retryable(exc) -> bool:
+    """Classifica o erro: retry apenas para 408/429/5xx e falhas de transporte."""
+    if isinstance(exc, genai_errors.APIError):
+        return getattr(exc, "code", None) in RETRYABLE_STATUS
+    return isinstance(exc, RETRYABLE_EXCEPTIONS)
+
+
+def _wait_seconds(attempt, retry_after=None) -> float:
+    """Backoff exponencial com jitter; Retry-After tem prioridade."""
+    if retry_after is not None:
+        return retry_after
+    delay = min(GEMINI_BACKOFF_MAX, GEMINI_BACKOFF_BASE ** (attempt - 1))
+    return delay + random.uniform(0, delay * 0.5)
+
+
+def _build_http_options():
+    """Timeout configuravel + retry do SDK desligado (o retry e nosso)."""
+    return types.HttpOptions(
+        timeout=int(GEMINI_TIMEOUT_S * 1000),
+        retry_options=types.HttpRetryOptions(attempts=1),
     )
 
-    data = json.loads(response.text)
-    return data.get("clips", [])
+
+def analyze(segments, progress_callback=None) -> list[dict]:
+    client = genai.Client(api_key=API_KEY, http_options=_build_http_options())
+    block = build_transcript_block(segments)
+
+    config = types.GenerateContentConfig(
+        system_instruction=RULES,
+        temperature=TEMPERATURA,
+        response_mime_type="application/json",
+        response_schema=SCHEMA,
+    )
+
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            response = client.models.generate_content(
+                model=MODELO_GEMINI,
+                config=config,
+                contents=block,
+            )
+            data = json.loads(response.text)
+            return data.get("clips", [])
+        except Exception as exc:
+            if not _is_retryable(exc) or attempt >= GEMINI_MAX_ATTEMPTS:
+                raise
+            wait = _wait_seconds(attempt, _retry_after_seconds(exc))
+            _emit_retry(
+                progress_callback,
+                f"Analisando (tentativa {attempt + 1}/{GEMINI_MAX_ATTEMPTS}, "
+                f"aguardando {wait:.0f}s)...",
+            )
+            time.sleep(wait)
