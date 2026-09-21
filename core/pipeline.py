@@ -1,8 +1,16 @@
 import tempfile
 from pathlib import Path
 
-from core import ai_analyzer, audio, transcriber, video_ops, downloader
-from core.config import MAX_CLIP_DURATION, MIN_CLIP_DURATION, OUTPUT_DIR, PAUSE_GAP
+from core import ai_analyzer, audio, cache, transcriber, video_ops, downloader
+from core.config import (
+    LANGUAGE,
+    MAX_CLIP_DURATION,
+    MIN_CLIP_DURATION,
+    OUTPUT_DIR,
+    PAUSE_GAP,
+    WHISPER_COMPUTE_TYPE,
+    WHISPER_MODEL,
+)
 from utils.normalize import normalize_clips
 from utils.report import save_report
 
@@ -12,7 +20,7 @@ def _emit(progress_callback, stage, percent, message):
         progress_callback(stage, percent, message)
 
 
-def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None):
+def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None, force=False):
     if not yt_link and not video_path:
         raise ValueError("Informe yt_link ou video_path.")
 
@@ -41,12 +49,25 @@ def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None):
     out_root = Path(output_dir) if output_dir else OUTPUT_DIR
     out_dir = out_root / video_stem
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        _emit(progress_callback, "audio", 15, "Extraindo audio...")
-        audio_path = audio.extract_audio(video_path, tmp_dir)
+    key = cache.make_key(video_path, WHISPER_MODEL, LANGUAGE, WHISPER_COMPUTE_TYPE)
 
-        _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
-        segments = transcriber.transcribe(audio_path)
+    segments = None if force else cache.load_transcript(out_dir, key)
+    if segments is not None:
+        _emit(
+            progress_callback,
+            "transcricao",
+            20,
+            "Transcricao em cache, pulando...",
+        )
+    else:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            _emit(progress_callback, "audio", 15, "Extraindo audio...")
+            audio_path = audio.extract_audio(video_path, tmp_dir)
+
+            _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
+            segments = transcriber.transcribe(audio_path)
+
+        cache.save_transcript(out_dir, key, segments)
 
 
     if segments:
@@ -82,18 +103,20 @@ def _cli_progress(stage, percent, message):
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if len(sys.argv) != 2:
-        print("Uso: python -m core.pipeline <video|url>")
-        raise SystemExit(1)
+    parser = argparse.ArgumentParser(description="AutoCortesBR pipeline")
+    parser.add_argument("alvo", help="Caminho do video ou URL")
+    parser.add_argument(
+        "--force", action="store_true", help="Ignora o cache e retranscreve"
+    )
+    args = parser.parse_args()
 
-    alvo = sys.argv[1]
-    entrada = ({"yt_link": alvo} if alvo.startswith(("http://", "https://"))
-               else {"video_path": alvo})
+    entrada = ({"yt_link": args.alvo} if args.alvo.startswith(("http://", "https://"))
+               else {"video_path": args.alvo})
 
     try:
-        result = run(progress_callback=_cli_progress, **entrada)
+        result = run(progress_callback=_cli_progress, force=args.force, **entrada)
     except Exception as exc:
         print(f"Erro: {exc}", file=sys.stderr, flush=True)
         raise SystemExit(1)
