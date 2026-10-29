@@ -11,6 +11,7 @@ from core.config import (
     WHISPER_COMPUTE_TYPE,
     WHISPER_MODEL,
 )
+from core.options import ProcessingOptions
 from utils.normalize import normalize_clips
 from utils.report import save_report
 
@@ -20,7 +21,16 @@ def _emit(progress_callback, stage, percent, message):
         progress_callback(stage, percent, message)
 
 
-def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None, force=False):
+def run(
+    yt_link=None,
+    video_path=None,
+    output_dir=None,
+    progress_callback=None,
+    force=False,
+    options: ProcessingOptions | None = None,
+):
+    options = options or ProcessingOptions()
+
     if not yt_link and not video_path:
         raise ValueError("Informe yt_link ou video_path.")
 
@@ -49,7 +59,14 @@ def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None, 
     out_root = Path(output_dir) if output_dir else OUTPUT_DIR
     out_dir = out_root / video_stem
 
-    key = cache.make_key(video_path, WHISPER_MODEL, LANGUAGE, WHISPER_COMPUTE_TYPE)
+    key = cache.make_key(
+        video_path,
+        WHISPER_MODEL,
+        LANGUAGE,
+        WHISPER_COMPUTE_TYPE,
+        word_timestamps=options.captions_enabled
+        and options.caption_transcribe_mode == "full",
+    )
 
     segments = None if force else cache.load_transcript(out_dir, key)
     if segments is not None:
@@ -65,7 +82,11 @@ def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None, 
             audio_path = audio.extract_audio(video_path, tmp_dir)
 
             _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
-            segments = transcriber.transcribe(audio_path)
+            segments = transcriber.transcribe(
+                audio_path,
+                word_timestamps=options.captions_enabled
+                and options.caption_transcribe_mode == "full",
+            )
 
         cache.save_transcript(out_dir, key, segments)
 
@@ -88,7 +109,15 @@ def run(yt_link=None, video_path=None, output_dir=None, progress_callback=None, 
     )
 
     _emit(progress_callback, "corte", 70, "Cortando clipes...")
-    clip_paths = video_ops.cut_all(video_path, clips, total_duration, out_dir)
+    clip_paths = video_ops.cut_all(
+        video_path,
+        clips,
+        total_duration,
+        out_dir,
+        options=options,
+        segments=segments,
+        progress_callback=progress_callback,
+    )
 
     _emit(progress_callback, "relatorio", 95, "Gerando relatorio...")
     report_path = save_report(clips, out_dir, clip_paths)
@@ -110,13 +139,24 @@ if __name__ == "__main__":
     parser.add_argument(
         "--force", action="store_true", help="Ignora o cache e retranscreve"
     )
+    parser.add_argument(
+        "--captions", action="store_true", help="Gera legendas dinamicas"
+    )
     args = parser.parse_args()
 
     entrada = ({"yt_link": args.alvo} if args.alvo.startswith(("http://", "https://"))
                else {"video_path": args.alvo})
 
+    options = ProcessingOptions()
+    options.captions_enabled = args.captions
+
     try:
-        result = run(progress_callback=_cli_progress, force=args.force, **entrada)
+        result = run(
+            progress_callback=_cli_progress,
+            force=args.force,
+            options=options,
+            **entrada,
+        )
     except Exception as exc:
         print(f"Erro: {exc}", file=sys.stderr, flush=True)
         raise SystemExit(1)

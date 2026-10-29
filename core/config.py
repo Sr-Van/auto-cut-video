@@ -69,3 +69,18 @@ MIN_VIRAL_SCORE = int(os.getenv("MIN_VIRAL_SCORE", "8"))
 # Limite de clipes por video (teto de seguranca, nao uma meta).
 MAX_CLIPS = int(os.getenv("MAX_CLIPS", "15"))
 LANGUAGE = os.getenv("LANGUAGE", "pt")
+
+# --- Clip vertical 9:16 com fundo desfocado ---
+VERTICAL_ENABLED = os.getenv("VERTICAL_ENABLED", "1").lower() not in ("0", "false", "no")
+VERTICAL_WIDTH = int(os.getenv("VERTICAL_WIDTH", "1080"))
+VERTICAL_HEIGHT = int(os.getenv("VERTICAL_HEIGHT", "1920"))
+# Fator de zoom do video principal sobre o "contain" (1.0 = enquadra inteiro).
+VERTICAL_ZOOM = float(os.getenv("VERTICAL_ZOOM", "1.7"))
+VERTICAL_BLUR_SIGMA = float(os.getenv("VERTICAL_BLUR_SIGMA", "6"))
+VERTICAL_BLUR_DIVISOR = int(os.getenv("VERTICAL_BLUR_DIVISOR", "4"))
+VERTICAL_BG_BRIGHTNESS = float(os.getenv("VERTICAL_BG_BRIGHTNESS", "-0.05"))
+# Encoder vazio = detecta automaticamente (hardware, com fallback libx264).
+VERTICAL_ENCODER = os.getenv("VERTICAL_ENCODER", "").strip()
+VERTICAL_CRF = int(os.getenv("VERTICAL_CRF", "20"))
+VERTICAL_PRESET = os.getenv("VERTICAL_PRESET", "veryfast")
+VERTICAL_MAX_WORKERS = int(os.getenv("VERTICAL_MAX_WORKERS", "2"))
