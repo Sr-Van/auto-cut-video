@@ -63,4 +63,9 @@ PADDING_S = 5
 MIN_CLIP_DURATION = 30
 MAX_CLIP_DURATION = 90
 PAUSE_GAP = 1.5
+# Nota minima (0-10) para um clipe ser mantido. A meta e nota 10, mas clipes
+# a partir desta nota tambem sao aproveitados.
+MIN_VIRAL_SCORE = int(os.getenv("MIN_VIRAL_SCORE", "8"))
+# Limite de clipes por video (teto de seguranca, nao uma meta).
+MAX_CLIPS = int(os.getenv("MAX_CLIPS", "15"))
 LANGUAGE = os.getenv("LANGUAGE", "pt")

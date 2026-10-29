@@ -14,16 +14,18 @@ from core.config import (
     GEMINI_BACKOFF_MAX,
     GEMINI_MAX_ATTEMPTS,
     GEMINI_TIMEOUT_S,
+    MAX_CLIPS,
+    MIN_VIRAL_SCORE,
     MODELOS_GEMINI,
     TEMPERATURA,
 )
 from utils.timefmt import seconds_to_hhmmss
 
 RULES = """
-Você é um editor sênior de Shorts/Reels/TikTok especializado na cultura da internet brasileira. Seu trabalho é encontrar os melhores cortes de um vídeo a partir da transcrição com minutagem. Seja EXIGENTE: a maioria dos trechos não merece virar corte, e retornar poucos clipes bons é melhor que muitos medianos.
+Você é um editor sênior de Shorts/Reels/TikTok especializado na cultura da internet brasileira. Seu trabalho é encontrar os melhores cortes de um vídeo a partir da transcrição com minutagem. Seu objetivo é encontrar TODOS os trechos do vídeo que funcionam como Short — não apenas o melhor. Busque sempre clipes nota 10, mas clipes com nota {MIN_SCORE} ou 9 também são bons e devem ser incluídos. Seja rigoroso na qualidade de cada clipe, mas NÃO limite artificialmente a quantidade: um vídeo longo normalmente rende vários cortes.
 
 ## COMO ANALISAR (siga esta ordem)
-1. Leia a transcrição inteira e identifique os momentos de maior impacto (frase de efeito, revelação, piada, confronto, virada emocional, dica surpreendente).
+1. Leia a transcrição inteira, do início ao fim, e liste TODOS os momentos de impacto (frase de efeito, revelação, piada, confronto, virada emocional, dica surpreendente), distribuídos ao longo de todo o vídeo — não pare no primeiro bom momento.
 2. Para cada candidato, encontre o ponto onde o espectador de um Short entenderia e se interessaria SEM ter visto o resto do vídeo. Esse é o início do clipe.
 3. Avalie cada candidato pelos critérios abaixo ANTES de dar a nota.
 4. Descarte quem não passar nos filtros eliminatórios.
@@ -46,14 +48,14 @@ Você é um editor sênior de Shorts/Reels/TikTok especializado na cultura da in
 - O clipe deve TERMINAR logo após o desfecho ou a reação, na conclusão natural da ideia. Não estenda além disso.
 - Use SOMENTE timestamps que existem na transcrição. "start" é o início de um segmento e "end" é o fim de um segmento. Nunca invente tempos.
 - Clipes não podem se sobrepor.
-- Máximo de {MAX_CLIPS} clipes. Se nenhum merecer, retorne lista vazia.
+- Máximo de {MAX_CLIPS} clipes (é um teto, não uma meta). Inclua todos os que atingirem a nota mínima; só retorne lista vazia se realmente nenhum trecho atingir.
 
 ## NOTA DE VIRALIDADE (0-10) — some os pontos
 - Gancho nos primeiros 3 segundos (0-3): 0 = nenhum, 3 = para o scroll imediatamente.
 - Payoff/emoção (0-3): 0 = nenhum, 3 = risada, raiva, surpresa ou identificação forte.
 - Autonomia (0-2): 0 = precisa de contexto, 2 = totalmente compreensível sozinho.
 - Compartilhabilidade (0-2): 0 = ninguém mandaria para amigos, 2 = "olha isso!" imediato.
-Inclua apenas clipes com nota >= 7. Evite dar nota 9-10 a mais de um clipe a cada 30 minutos de vídeo, pois essa nota é rara.
+Inclua TODOS os clipes com nota >= {MIN_SCORE}. A meta é nota 10, mas clipes {MIN_SCORE} e 9 NÃO devem ser descartados. Avalie cada clipe de forma independente e honesta: não há cota de notas altas por vídeo, e a existência de um clipe nota 10 não reduz a nota nem exclui os demais. Ordene a lista pela nota, da maior para a menor.
 
 ## CATEGORIAS
 EDUCATIVO (revelação do tipo "não sabia disso", dica prática), POLÊMICO (opinião forte, crítica, quebra de tabu), ENGRAÇADO (quebra de expectativa, ironia, gíria, reação exagerada), RELEVANTE (superação, conselho, reflexão). Escolha a que melhor explica POR QUE o clipe prende.
@@ -126,6 +128,28 @@ SCHEMA = {
     },
     "required": ["clips"],
 }
+
+def build_rules() -> str:
+    """Preenche os placeholders das regras com os valores da config."""
+    return (
+        RULES.replace("{MAX_CLIPS}", str(MAX_CLIPS))
+        .replace("{MIN_SCORE}", str(MIN_VIRAL_SCORE))
+    )
+
+
+def _filter_by_score(clips) -> list[dict]:
+    """Mantem clipes com nota >= MIN_VIRAL_SCORE, do maior para o menor."""
+    kept = []
+    for clip in clips or []:
+        try:
+            score = int(clip.get("viral_score", 0))
+        except (TypeError, ValueError):
+            continue
+        if score >= MIN_VIRAL_SCORE:
+            kept.append(clip)
+    kept.sort(key=lambda c: int(c.get("viral_score", 0)), reverse=True)
+    return kept[:MAX_CLIPS]
+
 
 def build_transcript_block(segments) -> str:
     lines = []
@@ -238,7 +262,7 @@ def analyze(segments, progress_callback=None, api_keys=None) -> list[dict]:
     block = build_transcript_block(segments)
 
     config = types.GenerateContentConfig(
-        system_instruction=RULES,
+        system_instruction=build_rules(),
         temperature=TEMPERATURA,
         response_mime_type="application/json",
         response_schema=SCHEMA,
@@ -271,7 +295,7 @@ def analyze(segments, progress_callback=None, api_keys=None) -> list[dict]:
                     contents=block,
                 )
                 data = json.loads(response.text)
-                return data.get("clips", [])
+                return _filter_by_score(data.get("clips", []))
             except Exception as exc:
                 if _is_quota(exc) or _is_auth_error(exc):
                     motivo = "esgotada" if _is_quota(exc) else "invalida"
