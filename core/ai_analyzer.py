@@ -20,32 +20,46 @@ from core.config import (
 from utils.timefmt import seconds_to_hhmmss
 
 RULES = """
-Você é um curador e analista de conteúdo viral altamente especializado na cultura da internet brasileira, focado em redes como TikTok, Instagram Reels e YouTube Shorts.
+Você é um editor sênior de Shorts/Reels/TikTok especializado na cultura da internet brasileira. Seu trabalho é encontrar os melhores cortes de um vídeo a partir da transcrição com minutagem. Seja EXIGENTE: a maioria dos trechos não merece virar corte, e retornar poucos clipes bons é melhor que muitos medianos.
 
-Sua missão é analisar a transcrição com minutagem de um vídeo de origem brasileira, identificar os trechos relevantes e ignorar partes monótonas, pausas longas ou falas sem impacto.
+## COMO ANALISAR (siga esta ordem)
+1. Leia a transcrição inteira e identifique os momentos de maior impacto (frase de efeito, revelação, piada, confronto, virada emocional, dica surpreendente).
+2. Para cada candidato, encontre o ponto onde o espectador de um Short entenderia e se interessaria SEM ter visto o resto do vídeo. Esse é o início do clipe.
+3. Avalie cada candidato pelos critérios abaixo ANTES de dar a nota.
+4. Descarte quem não passar nos filtros eliminatórios.
 
-IMPORTANTE: cada "clipe" deve ser um trecho contínuo entre 30 e 90 segundos. Ele deve conter o contexto completo do momento forte: a construção, o pico e a reação. O clipe deve TERMINAR no fim natural do assunto (quando o raciocínio conclui ou a fala muda de tema), e não no meio de uma frase. Agrupe falas consecutivas sobre o mesmo assunto em um único clipe, respeitando o limite de 90 segundos. NÃO entregue frases isoladas nem trechos curtos — prefira blocos coerentes que sustentem o momento de impacto e que fechem o assunto.
+## FILTROS ELIMINATÓRIOS (se falhar em qualquer um, não inclua)
+- Depende de contexto anterior para ser entendido (pronomes sem referência, "como eu disse antes", assunto que começa no meio).
+- O pico acontece depois dos primeiros 8 segundos sem nada interessante antes.
+- Termina no meio de uma ideia ou frase.
+- Conteúdo difamatório contra pessoas reais, discurso de ódio, incitação à violência, conteúdo sexual explícito ou desinformação perigosa (saúde, golpes).
+- Predominância de vícios de linguagem, enrolação ou ritmo monótono.
+- O clipe NÃO PODE conter autopromoção, publicidade, pedido de like/inscrição/comentário,
+  cupom, patrocínio, link, despedida ou agradecimento de audiência. Se o trecho bom é
+  seguido por isso, o clipe termina ANTES. Fim do clipe = fim da ideia, nunca fim do vídeo.
+- Se o conteúdo útil tiver menos que a duração mínima, DESCARTE o clipe. Nunca complete
+  tempo com enrolação ou propaganda.
 
-Para cada clipe, classifique em uma das categorias abaixo e atribua uma "Nota de Viralidade" de 0 a 10.
+## REGRAS DE RECORTE
+- Duração: entre 25 e 75 segundos (ideal: 35-60).
+- O clipe deve COMEÇAR perto do gancho: a primeira frase deve prender (pergunta, afirmação forte, promessa, conflito). Corte introduções e preâmbulos, mas mantenha o mínimo para a frase fazer sentido sozinha.
+- O clipe deve TERMINAR logo após o desfecho ou a reação, na conclusão natural da ideia. Não estenda além disso.
+- Use SOMENTE timestamps que existem na transcrição. "start" é o início de um segmento e "end" é o fim de um segmento. Nunca invente tempos.
+- Clipes não podem se sobrepor.
+- Máximo de {MAX_CLIPS} clipes. Se nenhum merecer, retorne lista vazia.
 
-CRITÉRIOS DE CATEGORIZAÇÃO:
-1. EDUCATIVO: explicações claras de temas complexos, dicas práticas, curiosidades ou conhecimentos que geram o efeito "eu não sabia disso".
-2. POLÊMICO: opiniões impopulares, críticas contundentes, debates acalorados ou quebra de tabus (sem violar regras de segurança).
-3. ENGRAÇADO: quebra de expectativa, humor autodepreciativo, ironia, reações autênticas e exageradas ou uso criativo de gírias regionais brasileiras.
-4. RELEVANTE: histórias de superação, conselhos de vida, discursos motivacionais ou reflexões profundas.
+## NOTA DE VIRALIDADE (0-10) — some os pontos
+- Gancho nos primeiros 3 segundos (0-3): 0 = nenhum, 3 = para o scroll imediatamente.
+- Payoff/emoção (0-3): 0 = nenhum, 3 = risada, raiva, surpresa ou identificação forte.
+- Autonomia (0-2): 0 = precisa de contexto, 2 = totalmente compreensível sozinho.
+- Compartilhabilidade (0-2): 0 = ninguém mandaria para amigos, 2 = "olha isso!" imediato.
+Inclua apenas clipes com nota >= 7. Evite dar nota 9-10 a mais de um clipe a cada 30 minutos de vídeo, pois essa nota é rara.
 
-CRITÉRIOS DE VIRALIDADE (RANKING 0 a 10):
-- 9-10: pico (hook) forte e claro, fala com ritmo, não depende de muito contexto externo, gera forte emoção e é altamente compartilhável.
-- 7-8: excelente conteúdo, mas com construção levemente lenta ou exigindo leve edição externa.
-- 4-6: conteúdo bom apenas para nichos específicos; fala arrastada ou dependente de muito contexto.
-- 0-3: descarte (vícios de linguagem, assunto irrelevante, ritmo monótono). NÃO inclua estes na resposta.
+## CATEGORIAS
+EDUCATIVO (revelação do tipo "não sabia disso", dica prática), POLÊMICO (opinião forte, crítica, quebra de tabu), ENGRAÇADO (quebra de expectativa, ironia, gíria, reação exagerada), RELEVANTE (superação, conselho, reflexão). Escolha a que melhor explica POR QUE o clipe prende.
 
-O campo "hook" deve indicar o instante aproximado do pico (o momento mais forte dentro do clipe).
-O campo "start" e "end" devem delimitar o trecho completo do clipe (formato HH:MM:SS), com duração entre 30 e 90 segundos, abrangendo o contexto antes e depois do pico. O "end" deve cair no fim natural do assunto (mudança de tema ou conclusão da fala).
-O campo "viral_score" é um número de 0 a 10.
-O campo "category" deve ser um de: EDUCATIVO, POLÊMICO, ENGRAÇADO, RELEVANTE.
-Escreva "title" (título do corte) e "description" (descrição do corte) baseados no que foi dito.
-Escreva "summary" (fala principal resumida) e "justification" (por que recebeu essa nota e como atinge o público brasileiro).
+## SAÍDA
+Retorne JSON seguindo o schema. Preencha os campos NA ORDEM do schema: primeiro "hook_text" e "analysis", depois as notas.
 """
 
 SCHEMA = {
@@ -56,23 +70,62 @@ SCHEMA = {
             "items": {
                 "type": "OBJECT",
                 "properties": {
-                    "start": {"type": "STRING", "description": "Inicio do clipe (HH:MM:SS). Duracao entre 30 e 90 segundos."},
-                    "end": {"type": "STRING", "description": "Fim do clipe (HH:MM:SS). Deve cair no fim natural do assunto."},
-                    "hook": {"type": "STRING", "description": "Instante do pico dentro do clipe (HH:MM:SS)."},
-                    "category": {"type": "STRING"},
-                    "viral_score": {"type": "NUMBER"},
+                    # 1) Localização: copiada da transcrição
+                    "start": {"type": "STRING", "description": "Início do clipe (HH:MM:SS), copiado exatamente de um segmento da transcrição."},
+                    "end": {"type": "STRING", "description": "Fim do clipe (HH:MM:SS), copiado exatamente de um segmento da transcrição."},
+                    "hook": {"type": "STRING", "description": "Instante do pico (HH:MM:SS)."},
+
+                    # 2) Evidência e raciocínio ANTES das notas
+                    "hook_text": {"type": "STRING", "description": "Frase exata, citada da transcrição, que abre o clipe."},
+                    "opening_check": {"type": "STRING", "description": "A primeira frase prende sozinha? O que falta de contexto, se algo?"},
+                    "analysis": {"type": "STRING", "description": "Raciocínio em 2-4 frases: por que esse trecho funciona ou não como Short, citando falas."},
+                    "is_standalone": {"type": "BOOLEAN", "description": "True somente se o clipe é compreensível sem ver o resto do vídeo."},
+
+                    # 3) Subnotas e nota final
+                    "score_hook": {"type": "INTEGER", "minimum": 0, "maximum": 3},
+                    "score_payoff": {"type": "INTEGER", "minimum": 0, "maximum": 3},
+                    "score_standalone": {"type": "INTEGER", "minimum": 0, "maximum": 2},
+                    "score_shareability": {"type": "INTEGER", "minimum": 0, "maximum": 2},
+                    "viral_score": {"type": "INTEGER", "minimum": 0, "maximum": 10},
+
+                    # 4) Metadados para publicação
+                    "category": {
+                        "type": "STRING",
+                        "enum": ["EDUCATIVO", "POLÊMICO", "ENGRAÇADO", "RELEVANTE"],
+                    },
                     "title": {"type": "STRING"},
                     "description": {"type": "STRING"},
                     "summary": {"type": "STRING"},
-                    "justification": {"type": "STRING"},
+                    "last_line": {
+                        "type": "STRING",
+                        "description": "Última frase do clipe, citada exatamente."
+                    },
+                    "has_promo_or_cta": {
+                        "type": "BOOLEAN",
+                        "description": "True se qualquer parte do clipe pede like, inscrição, comentário, cupom, link ou divulga produto/canal."
+                    },
                 },
-                "required": ["start", "end", "category", "viral_score"],
+                "propertyOrdering": [
+                    "start", "end", "hook", "hook_text", "opening_check",
+                    "analysis", "is_standalone",
+                    "score_hook", "score_payoff", "score_standalone",
+                    "score_shareability", "viral_score",
+                    "category", "title", "description", "summary",
+                    "last_line", "has_promo_or_cta",
+                ],
+                "required": [
+                    "start", "end", "hook", "hook_text", "opening_check",
+                    "analysis", "is_standalone",
+                    "score_hook", "score_payoff", "score_standalone",
+                    "score_shareability", "viral_score",
+                    "category", "title", "description", "summary",
+                    "last_line", "has_promo_or_cta",
+                ],
             },
         }
     },
     "required": ["clips"],
 }
-
 
 def build_transcript_block(segments) -> str:
     lines = []
