@@ -8,6 +8,7 @@ plan-v2.md
 __pycache__/
 *.pyc
 output/
+temp/
 *.wav
 *.mp3
 .venv/
