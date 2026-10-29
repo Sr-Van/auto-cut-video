@@ -1,5 +1,6 @@
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -10,10 +11,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
     QWidget,
-    QLineEdit
+    QLineEdit,
 )
 
 from core.config import OUTPUT_DIR
+from core.options import ProcessingOptions
+from gui.settings_dialog import SettingsDialog
 from gui.workers import PipelineWorker
 
 LOG_MAX_LINES = 500
@@ -23,12 +26,15 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AutoCortesBR")
-        self.resize(720, 560)
+        self.resize(760, 620)
         self.video_path = None
         self.worker = None
 
         self.settings = QSettings("AutoCortesBR", "AutoCortesBR")
         self.output_dir = self.settings.value("last_output_dir", str(OUTPUT_DIR))
+        self.options = ProcessingOptions.from_json(
+            self.settings.value("processing_options", "")
+        )
 
         self.video_link = QLineEdit()
         self.video_link.setPlaceholderText("Cole o link do video aqui")
@@ -37,11 +43,17 @@ class MainWindow(QMainWindow):
         self.select_button.clicked.connect(self.select_video)
 
         self.process_button = QPushButton("Processar")
-        #self.process_button.setEnabled(False)
         self.process_button.clicked.connect(self.process)
 
         self.output_button = QPushButton("Escolher pasta")
         self.output_button.clicked.connect(self.select_output_dir)
+
+        self.captions_checkbox = QCheckBox("Legendas dinamicas")
+        self.captions_checkbox.setChecked(self.options.captions_enabled)
+        self.captions_checkbox.toggled.connect(self.on_captions_toggled)
+
+        self.settings_button = QPushButton("Configuracoes")
+        self.settings_button.clicked.connect(self.open_settings)
 
         self.path_label = QLabel("Nenhum video selecionado")
         self.path_label.setWordWrap(True)
@@ -68,10 +80,16 @@ class MainWindow(QMainWindow):
         output_row.addWidget(self.output_button)
         output_row.addWidget(self.output_label, 1)
 
+        option_row = QHBoxLayout()
+        option_row.addWidget(self.captions_checkbox)
+        option_row.addStretch(1)
+        option_row.addWidget(self.settings_button)
+
         layout = QVBoxLayout()
         layout.addLayout(button_row)
         layout.addWidget(self.path_label)
         layout.addLayout(output_row)
+        layout.addLayout(option_row)
         layout.addWidget(self.stage_label)
         layout.addWidget(self.progress_bar)
         layout.addWidget(self.log_view)
@@ -87,7 +105,6 @@ class MainWindow(QMainWindow):
         if file_path:
             self.video_path = file_path
             self.path_label.setText(file_path)
-            #self.process_button.setEnabled(True)
 
     def select_output_dir(self):
         folder = QFileDialog.getExistingDirectory(
@@ -98,12 +115,34 @@ class MainWindow(QMainWindow):
             self.output_label.setText(folder)
             self.settings.setValue("last_output_dir", folder)
 
+    def on_captions_toggled(self, checked):
+        self.options.captions_enabled = checked
+        self._save_options()
+
+    def open_settings(self):
+        dialog = SettingsDialog(self.options, self)
+        if dialog.exec():
+            self.options = dialog.options
+            self.captions_checkbox.setChecked(self.options.captions_enabled)
+            self._save_options()
+
+    def _save_options(self):
+        self.settings.setValue("processing_options", self.options.to_json())
+
     def process(self):
         self.set_busy(True)
         self.progress_bar.setValue(0)
         self.log_view.clear()
 
-        self.worker = PipelineWorker(yt_link=self.video_link.text(), video_path=self.video_path, output_dir=self.output_dir)
+        self.options.captions_enabled = self.captions_checkbox.isChecked()
+        self._save_options()
+
+        self.worker = PipelineWorker(
+            yt_link=self.video_link.text(),
+            video_path=self.video_path,
+            output_dir=self.output_dir,
+            options=self.options,
+        )
         self.worker.stage_changed.connect(self.on_stage)
         self.worker.progress.connect(self.progress_bar.setValue)
         self.worker.message.connect(self.on_log)
@@ -115,6 +154,8 @@ class MainWindow(QMainWindow):
         self.select_button.setEnabled(not busy)
         self.process_button.setEnabled(not busy)
         self.output_button.setEnabled(not busy)
+        self.settings_button.setEnabled(not busy)
+        self.captions_checkbox.setEnabled(not busy)
 
     def on_stage(self, stage):
         self.stage_label.setText(stage)
