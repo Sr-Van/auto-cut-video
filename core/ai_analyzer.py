@@ -1,6 +1,7 @@
 import json
 import random
 import time
+from collections import deque
 
 import httpx
 from google import genai
@@ -8,12 +9,12 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from core.config import (
-    API_KEY,
+    API_KEYS,
     GEMINI_BACKOFF_BASE,
     GEMINI_BACKOFF_MAX,
     GEMINI_MAX_ATTEMPTS,
     GEMINI_TIMEOUT_S,
-    MODELO_GEMINI,
+    MODELOS_GEMINI,
     TEMPERATURA,
 )
 from utils.timefmt import seconds_to_hhmmss
@@ -112,9 +113,10 @@ def _retry_after_seconds(exc):
 
 
 def _is_retryable(exc) -> bool:
-    """Classifica o erro: retry apenas para 408/429/5xx e falhas de transporte."""
-    if isinstance(exc, genai_errors.APIError):
-        return getattr(exc, "code", None) in RETRYABLE_STATUS
+    """Retry para 408/429/5xx e falhas de transporte."""
+    code = _status_code(exc)
+    if code is not None:
+        return code in RETRYABLE_STATUS
     return isinstance(exc, RETRYABLE_EXCEPTIONS)
 
 
@@ -134,8 +136,52 @@ def _build_http_options():
     )
 
 
-def analyze(segments, progress_callback=None) -> list[dict]:
-    client = genai.Client(api_key=API_KEY, http_options=_build_http_options())
+def _status_code(exc):
+    """Codigo HTTP do erro, se houver."""
+    if isinstance(exc, genai_errors.APIError):
+        return getattr(exc, "code", None)
+    for attr in ("code", "status_code"):
+        value = getattr(exc, attr, None)
+        if isinstance(value, int):
+            return value
+    return None
+
+
+def _is_quota(exc) -> bool:
+    """Cota esgotada (429 / RESOURCE_EXHAUSTED)."""
+    if _status_code(exc) == 429:
+        return True
+    text = str(exc).lower()
+    return "resource_exhausted" in text or "quota" in text
+
+
+def _is_auth_error(exc) -> bool:
+    """Chave invalida / sem permissao."""
+    return _status_code(exc) in (401, 403)
+
+
+def _key_label(key: str) -> str:
+    """Identifica a chave sem expo-la (so os 4 ultimos caracteres)."""
+    key = (key or "").strip()
+    return f"...{key[-4:]}" if len(key) > 4 else "(chave)"
+
+
+_CLIENTS: dict[str, genai.Client] = {}
+
+
+def _get_client(key: str) -> genai.Client:
+    if key not in _CLIENTS:
+        _CLIENTS[key] = genai.Client(api_key=key, http_options=_build_http_options())
+    return _CLIENTS[key]
+
+
+def analyze(segments, progress_callback=None, api_keys=None) -> list[dict]:
+    keys = [k.strip() for k in (api_keys if api_keys is not None else API_KEYS) if k and k.strip()]
+    if not keys:
+        raise RuntimeError(
+            "Nenhuma API key configurada. Defina API_KEY ou API_KEYS no .env."
+        )
+
     block = build_transcript_block(segments)
 
     config = types.GenerateContentConfig(
@@ -145,24 +191,68 @@ def analyze(segments, progress_callback=None) -> list[dict]:
         response_schema=SCHEMA,
     )
 
+    # Rotaciona entre as chaves: se uma esgotar/for invalida, tira da fila e
+    # passa para a proxima sem esperar. Erros temporarios (5xx/timeout) giram a
+    # fila com backoff. Se um modelo falhar (nao-retentavel), desce para o
+    # proximo da lista de fallback.
+    dropped_keys: set[str] = set()
     attempt = 0
-    while True:
-        attempt += 1
-        try:
-            response = client.models.generate_content(
-                model=MODELO_GEMINI,
-                config=config,
-                contents=block,
-            )
-            data = json.loads(response.text)
-            return data.get("clips", [])
-        except Exception as exc:
-            if not _is_retryable(exc) or attempt >= GEMINI_MAX_ATTEMPTS:
-                raise
-            wait = _wait_seconds(attempt, _retry_after_seconds(exc))
-            _emit_retry(
-                progress_callback,
-                f"Analisando (tentativa {attempt + 1}/{GEMINI_MAX_ATTEMPTS}, "
-                f"aguardando {wait:.0f}s)...",
-            )
-            time.sleep(wait)
+    max_attempts = max(
+        GEMINI_MAX_ATTEMPTS,
+        GEMINI_MAX_ATTEMPTS * len(keys) * len(MODELOS_GEMINI),
+    )
+
+    for model in MODELOS_GEMINI:
+        # Cada modelo tenta com as chaves que ainda nao foram descartadas.
+        pool = deque(k for k in keys if k not in dropped_keys)
+        while pool:
+            if attempt >= max_attempts:
+                break
+            attempt += 1
+
+            key = pool[0]
+            try:
+                response = _get_client(key).models.generate_content(
+                    model=model,
+                    config=config,
+                    contents=block,
+                )
+                data = json.loads(response.text)
+                return data.get("clips", [])
+            except Exception as exc:
+                if _is_quota(exc) or _is_auth_error(exc):
+                    motivo = "esgotada" if _is_quota(exc) else "invalida"
+                    _emit_retry(
+                        progress_callback,
+                        f"Chave {_key_label(key)} {motivo}; trocando de chave...",
+                    )
+                    dropped_keys.add(key)
+                    pool.popleft()
+                    continue
+
+                if _is_retryable(exc):
+                    wait = _wait_seconds(attempt, _retry_after_seconds(exc))
+                    _emit_retry(
+                        progress_callback,
+                        f"Erro temporario com {_key_label(key)}; "
+                        f"tentando outra chave em {wait:.0f}s...",
+                    )
+                    pool.rotate(-1)
+                    time.sleep(wait)
+                    continue
+
+                # Modelo invalido/nao suportado: tenta o proximo da lista.
+                _emit_retry(
+                    progress_callback,
+                    f"Modelo {model} indisponivel; tentando o proximo da lista...",
+                )
+                break
+
+        if not [k for k in keys if k not in dropped_keys]:
+            break
+
+    raise RuntimeError(
+        f"Todos os modelos ({len(MODELOS_GEMINI)}) falharam ou todas as "
+        f"chaves ({len(keys)}) esgotaram. Aguarde o reset da cota, ajuste "
+        "os modelos ou adicione outra chave no .env."
+    )

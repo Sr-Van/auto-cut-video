@@ -1,4 +1,5 @@
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -8,8 +9,49 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "output"
 
-API_KEY = os.getenv("API_KEY", "")
-MODELO_GEMINI = "gemini-3.6-flash"
+
+def _load_api_keys() -> list[str]:
+    """Le chaves em API_KEY_1..N, API_KEYS (virgula/espaco) e API_KEY (legado)."""
+    keys: list[str] = []
+
+    numbered: list[tuple[int, str]] = []
+    for name, value in os.environ.items():
+        match = re.fullmatch(r"API_KEY_(\d+)", name)
+        if match and value.strip():
+            numbered.append((int(match.group(1)), value.strip()))
+    keys += [value for _, value in sorted(numbered)]
+
+    for part in re.split(r"[,\s]+", os.getenv("API_KEYS", "")):
+        if part.strip():
+            keys.append(part.strip())
+
+    single = os.getenv("API_KEY", "").strip()
+    if single:
+        keys.append(single)
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for key in keys:
+        if key not in seen:
+            seen.add(key)
+            unique.append(key)
+    return unique
+
+
+API_KEYS = _load_api_keys()
+# Mantido por compatibilidade (primeira chave configurada).
+API_KEY = API_KEYS[0] if API_KEYS else ""
+# Lista de fallback: se um modelo falhar, tenta o proximo da lista.
+MODELOS_GEMINI = [
+    "gemini-3.8-flash",      # Mais recente e inteligente da linha Flash
+    "gemini-3.7-flash",      # Versão anterior excelente
+    "gemini-3.6-flash",      # Versão equilibrada
+    "gemini-3.5-flash",      # Versão anterior de texto
+    "gemini-3.5-flash-lite", # Versão leve com maior limite de RPM (15)
+    "gemini-3.1-flash-lite", # Versão leve alternativa
+]
+# Mantido por compatibilidade (primeiro modelo da lista).
+MODELO_GEMINI = MODELOS_GEMINI[0]
 GEMINI_MAX_ATTEMPTS = int(os.getenv("GEMINI_MAX_ATTEMPTS", "4"))
 GEMINI_TIMEOUT_S = float(os.getenv("GEMINI_TIMEOUT_S", "120"))
 GEMINI_BACKOFF_BASE = float(os.getenv("GEMINI_BACKOFF_BASE", "2"))
