@@ -13,7 +13,9 @@ import os
 import shutil
 import subprocess
 from functools import lru_cache
+from threading import Event
 
+from core.exceptions import check_cancelled, run_interruptible_cmd
 from core.options import ProcessingOptions
 
 # Ordem de preferencia dos encoders de hardware.
@@ -23,7 +25,9 @@ _HW_ENCODERS = ("h264_nvenc", "h264_qsv", "h264_amf")
 def _require_ffmpeg() -> str:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError("FFmpeg nao encontrado. Instale o FFmpeg e adicione ao PATH.")
+        raise RuntimeError(
+            "FFmpeg nao encontrado. Instale o FFmpeg e adicione ao PATH."
+        )
     return ffmpeg
 
 
@@ -135,9 +139,11 @@ def render_clip(
     *,
     options: ProcessingOptions | None = None,
     ass_path: str | None = None,
+    cancel_event: Event | None = None,
 ) -> str:
     """Corta [start_s, end_s] e entrega 9:16, opcionalmente queimando legenda."""
-    options = options or ProcessingOptions()
+    check_cancelled(cancel_event)
+    options = (options or ProcessingOptions.from_env_or_config()).normalize()
     ffmpeg = _require_ffmpeg()
     # Absolutos: o cwd pode mudar para a pasta do .ass (filtro subtitles).
     video_path = os.path.abspath(str(video_path))
@@ -182,7 +188,12 @@ def render_clip(
         str(out_path),
     ]
 
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    result = run_interruptible_cmd(
+        cmd,
+        cancel_event=cancel_event,
+        cwd=cwd,
+        cleanup_path=out_path,
+    )
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao renderizar clip vertical: {result.stderr}")
     return str(out_path)
@@ -205,7 +216,7 @@ if __name__ == "__main__":
 
         args.end = get_duration(args.video)
 
-    options = ProcessingOptions()
+    options = ProcessingOptions.from_env_or_config()
     if args.zoom is not None:
         options.zoom = args.zoom
     if args.encoder is not None:

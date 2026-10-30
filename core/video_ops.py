@@ -5,13 +5,14 @@ import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Event
 
 from core import audio, cache, captions, render, transcriber
-from core.config import (
-    LANGUAGE,
-    OUTPUT_DIR,
-    WHISPER_COMPUTE_TYPE,
-    WHISPER_MODEL,
+from core.config import OUTPUT_DIR
+from core.exceptions import (
+    PipelineCancelledError,
+    check_cancelled,
+    run_interruptible_cmd,
 )
 from core.options import ProcessingOptions
 from utils.timefmt import clamp_seconds, hhmmss_to_seconds
@@ -20,14 +21,18 @@ from utils.timefmt import clamp_seconds, hhmmss_to_seconds
 def _require_ffmpeg() -> str:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError("FFmpeg nao encontrado. Instale o FFmpeg e adicione ao PATH.")
+        raise RuntimeError(
+            "FFmpeg nao encontrado. Instale o FFmpeg e adicione ao PATH."
+        )
     return ffmpeg
 
 
 def _require_ffprobe() -> str:
     ffprobe = shutil.which("ffprobe")
     if ffprobe is None:
-        raise RuntimeError("ffprobe nao encontrado. Instale o FFmpeg e adicione ao PATH.")
+        raise RuntimeError(
+            "ffprobe nao encontrado. Instale o FFmpeg e adicione ao PATH."
+        )
     return ffprobe
 
 
@@ -65,7 +70,9 @@ def cut_clip(
     total_duration: float,
     out_path: str,
     padding_s: float = 5.0,
+    cancel_event: Event | None = None,
 ) -> str:
+    check_cancelled(cancel_event)
     ffmpeg = _require_ffmpeg()
     cut_start, cut_end = _cut_window(start, end, total_duration, padding_s)
 
@@ -87,7 +94,11 @@ def cut_clip(
         "copy",
         str(out_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_interruptible_cmd(
+        cmd,
+        cancel_event=cancel_event,
+        cleanup_path=out_path,
+    )
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao cortar clip: {result.stderr}")
     return out_path
@@ -113,22 +124,39 @@ def _transcribe_clip_words(
     cut_end: float,
     out_dir: Path,
     index: int,
-    whisper_model: str | None = None,
+    options: ProcessingOptions,
+    cancel_event: Event | None = None,
 ) -> list[captions.CaptionWord]:
     """Retranscreve so o trecho do clipe (timing local, mais preciso) com cache."""
-    chosen_model = (whisper_model or WHISPER_MODEL).strip() or WHISPER_MODEL
+    check_cancelled(cancel_event)
     cache_dir = out_dir / ".cache"
     key = cache.make_clip_key(
-        video_path, cut_start, cut_end, chosen_model, LANGUAGE, WHISPER_COMPUTE_TYPE
+        video_path,
+        cut_start,
+        cut_end,
+        options.whisper_model,
+        options.language,
+        options.whisper_compute_type,
     )
     path = cache.clip_transcript_path(cache_dir, index)
 
     segments = cache.load_transcript_file(path, key)
     if segments is None:
         with tempfile.TemporaryDirectory(prefix="autocut_audio_") as tmp_dir:
-            wav_path = audio.extract_audio_segment(video_path, cut_start, cut_end, tmp_dir)
+            wav_path = audio.extract_audio_segment(
+                video_path,
+                cut_start,
+                cut_end,
+                tmp_dir,
+                cancel_event=cancel_event,
+            )
             segments = transcriber.transcribe(
-                wav_path, word_timestamps=True, model_name=chosen_model
+                wav_path,
+                word_timestamps=True,
+                model_name=options.whisper_model,
+                language=options.language,
+                compute_type=options.whisper_compute_type,
+                cancel_event=cancel_event,
             )
         cache.save_transcript_file(path, key, segments)
 
@@ -152,6 +180,7 @@ def _clip_words(
     index: int,
     options: ProcessingOptions,
     segments,
+    cancel_event: Event | None = None,
 ):
     if options.caption_transcribe_mode == "clip":
         return _transcribe_clip_words(
@@ -160,7 +189,8 @@ def _clip_words(
             cut_end,
             out_dir,
             index,
-            whisper_model=options.whisper_model,
+            options=options,
+            cancel_event=cancel_event,
         )
     if segments:
         return captions.words_in_window(segments, cut_start, cut_end)
@@ -168,15 +198,30 @@ def _clip_words(
 
 
 def _process_vertical(
-    video_path, clip, total_duration, out_path, options, segments, index
+    video_path,
+    clip,
+    total_duration,
+    out_path,
+    options,
+    segments,
+    index,
+    cancel_event: Event | None = None,
 ):
+    check_cancelled(cancel_event)
     cut_start, cut_end = _cut_window(
         clip["start"], clip["end"], total_duration, options.padding_s
     )
 
     if options.captions_enabled:
         words = _clip_words(
-            video_path, cut_start, cut_end, Path(out_path).parent, index, options, segments
+            video_path,
+            cut_start,
+            cut_end,
+            Path(out_path).parent,
+            index,
+            options,
+            segments,
+            cancel_event=cancel_event,
         )
         if words:
             with tempfile.TemporaryDirectory(prefix="autocut_caps_") as tmp_dir:
@@ -188,10 +233,16 @@ def _process_vertical(
                     out_path,
                     options=options,
                     ass_path=ass_path,
+                    cancel_event=cancel_event,
                 )
 
     return render.render_clip(
-        video_path, cut_start, cut_end, out_path, options=options
+        video_path,
+        cut_start,
+        cut_end,
+        out_path,
+        options=options,
+        cancel_event=cancel_event,
     )
 
 
@@ -205,7 +256,16 @@ def _safe_filename(title, fallback: str, max_length: int = 120) -> str:
     return name[:max_length].rstrip(" .")
 
 
-def _process_copy(video_path, clip, total_duration, out_path, options, segments, index):
+def _process_copy(
+    video_path,
+    clip,
+    total_duration,
+    out_path,
+    options,
+    segments,
+    index,
+    cancel_event: Event | None = None,
+):
     return cut_clip(
         video_path,
         clip["start"],
@@ -213,6 +273,7 @@ def _process_copy(video_path, clip, total_duration, out_path, options, segments,
         total_duration,
         out_path,
         options.padding_s,
+        cancel_event=cancel_event,
     )
 
 
@@ -225,8 +286,10 @@ def cut_all(
     options: ProcessingOptions | None = None,
     segments=None,
     progress_callback=None,
+    cancel_event: Event | None = None,
 ) -> list[str]:
-    options = options or ProcessingOptions()
+    check_cancelled(cancel_event)
+    options = (options or ProcessingOptions.from_env_or_config()).normalize()
 
     if total_duration is None:
         total_duration = get_duration(video_path)
@@ -255,8 +318,12 @@ def cut_all(
         out_path = out_dir / f"{name}.mp4"
         jobs.append((idx, clip, str(out_path)))
 
+    if not jobs:
+        return []
+
     max_workers = options.max_workers if vertical else None
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=max_workers)
+    try:
         futures = {
             executor.submit(
                 process,
@@ -267,6 +334,7 @@ def cut_all(
                 options,
                 segments,
                 idx,
+                cancel_event,
             ): out_path
             for idx, clip, out_path in jobs
         }
@@ -277,11 +345,17 @@ def cut_all(
         for future in as_completed(futures):
             out_path = futures[future]
             results[out_path] = future.result()
+            check_cancelled(cancel_event)
             done += 1
             if progress_callback:
                 percent = 70 + int(22 * done / max(1, total))
                 progress_callback(
                     "clipes", percent, f"Clipes renderizados: {done}/{total}"
                 )
+    except PipelineCancelledError:
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
     return [results[out_path] for _, _, out_path in jobs]

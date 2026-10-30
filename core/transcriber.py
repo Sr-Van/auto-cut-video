@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
-from threading import Lock
+from threading import Event, Lock
 
 from faster_whisper import WhisperModel
 
 from core.config import LANGUAGE, WHISPER_COMPUTE_TYPE, WHISPER_MODEL
+from core.exceptions import check_cancelled
 
 
 @dataclass
@@ -30,14 +31,18 @@ _INIT_LOCK = Lock()
 _RUN_LOCK = Lock()
 
 
-def get_model(model_name: str | None = None) -> WhisperModel:
+def get_model(
+    model_name: str | None = None,
+    compute_type: str | None = None,
+) -> WhisperModel:
     global _MODEL, _MODEL_KEY
     chosen = (model_name or WHISPER_MODEL).strip() or WHISPER_MODEL
+    eff_compute = (compute_type or WHISPER_COMPUTE_TYPE).strip() or WHISPER_COMPUTE_TYPE
     with _INIT_LOCK:
-        key = (chosen, WHISPER_COMPUTE_TYPE)
+        key = (chosen, eff_compute)
         if _MODEL is None or _MODEL_KEY != key:
             _MODEL = WhisperModel(
-                chosen, device="auto", compute_type=WHISPER_COMPUTE_TYPE
+                chosen, device="auto", compute_type=eff_compute
             )
             _MODEL_KEY = key
         return _MODEL
@@ -47,21 +52,33 @@ def transcribe(
     audio_path: str,
     word_timestamps: bool = False,
     model_name: str | None = None,
+    language: str | None = None,
+    compute_type: str | None = None,
+    cancel_event: Event | None = None,
 ) -> list[Segment]:
-    model = get_model(model_name)
+    check_cancelled(cancel_event)
+    model = get_model(model_name, compute_type=compute_type)
+    eff_lang = (language or LANGUAGE).strip() or LANGUAGE
+    check_cancelled(cancel_event)
+
     # O modelo e compartilhado entre threads (clipes em paralelo), entao a
     # inferencia e serializada. A geracao precisa ser consumida sob o lock,
     # pois o trabalho de fato acontece durante a iteracao.
+    raw_segments = []
     with _RUN_LOCK:
-        raw_segments, _info = model.transcribe(
+        check_cancelled(cancel_event)
+        segments_iter, _info = model.transcribe(
             audio_path,
-            language=LANGUAGE,
+            language=eff_lang,
             word_timestamps=word_timestamps,
         )
-        raw_segments = list(raw_segments)
+        for seg in segments_iter:
+            check_cancelled(cancel_event)
+            raw_segments.append(seg)
 
     result: list[Segment] = []
     for i, seg in enumerate(raw_segments, start=1):
+        check_cancelled(cancel_event)
         words: list[Word] = []
         if word_timestamps:
             for raw in getattr(seg, "words", None) or []:

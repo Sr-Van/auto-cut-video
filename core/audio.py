@@ -1,16 +1,25 @@
 import shutil
-import subprocess
 from pathlib import Path
+from threading import Event
+
+from core.exceptions import check_cancelled, run_interruptible_cmd
 
 
 def _require_ffmpeg() -> str:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError("FFmpeg nao encontrado. Instale o FFmpeg e adicione ao PATH.")
+        raise RuntimeError(
+            "FFmpeg nao encontrado. Instale o FFmpeg e adicione ao PATH."
+        )
     return ffmpeg
 
 
-def extract_audio(video_path: str, output_dir: str) -> str:
+def extract_audio(
+    video_path: str,
+    output_dir: str,
+    cancel_event: Event | None = None,
+) -> str:
+    check_cancelled(cancel_event)
     ffmpeg = _require_ffmpeg()
     video = Path(video_path)
     if not video.exists():
@@ -32,7 +41,11 @@ def extract_audio(video_path: str, output_dir: str) -> str:
         "16000",
         str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_interruptible_cmd(
+        cmd,
+        cancel_event=cancel_event,
+        cleanup_path=output_path,
+    )
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao extrair audio: {result.stderr}")
 
@@ -40,9 +53,14 @@ def extract_audio(video_path: str, output_dir: str) -> str:
 
 
 def extract_audio_segment(
-    video_path: str, start_s: float, end_s: float, output_dir: str
+    video_path: str,
+    start_s: float,
+    end_s: float,
+    output_dir: str,
+    cancel_event: Event | None = None,
 ) -> str:
     """Extrai apenas a janela [start_s, end_s] em WAV mono 16 kHz."""
+    check_cancelled(cancel_event)
     ffmpeg = _require_ffmpeg()
     video = Path(video_path)
     if not video.exists():
@@ -73,7 +91,11 @@ def extract_audio_segment(
         "16000",
         str(output_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_interruptible_cmd(
+        cmd,
+        cancel_event=cancel_event,
+        cleanup_path=output_path,
+    )
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao extrair audio do trecho: {result.stderr}")
     return str(output_path)

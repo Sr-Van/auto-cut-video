@@ -1,16 +1,11 @@
+import sys
 import tempfile
 from pathlib import Path
+from threading import Event
 
-from core import ai_analyzer, audio, cache, transcriber, video_ops, downloader
-from core.config import (
-    LANGUAGE,
-    MAX_CLIP_DURATION,
-    MIN_CLIP_DURATION,
-    OUTPUT_DIR,
-    PAUSE_GAP,
-    WHISPER_COMPUTE_TYPE,
-    WHISPER_MODEL,
-)
+from core import ai_analyzer, audio, cache, downloader, transcriber, video_ops
+from core.config import BASE_DIR, OUTPUT_DIR
+from core.exceptions import PipelineCancelledError, check_cancelled
 from core.options import ProcessingOptions
 from utils.normalize import normalize_clips
 from utils.report import save_report
@@ -21,6 +16,20 @@ def _emit(progress_callback, stage, percent, message):
         progress_callback(stage, percent, message)
 
 
+def _cleanup_temp_residuals(temp_dir: Path | None = None) -> None:
+    """Remove arquivos temporarios residuais (.part, .ytdl, autocut_*) em temp/."""
+    target = temp_dir or (BASE_DIR / "temp")
+    if not target.exists():
+        return
+    for pattern in ("*.part", "*.ytdl", "autocut_*"):
+        for item in target.glob(pattern):
+            try:
+                if item.is_file():
+                    item.unlink()
+            except OSError:
+                pass
+
+
 def run(
     yt_link=None,
     video_path=None,
@@ -28,119 +37,138 @@ def run(
     progress_callback=None,
     force=False,
     options: ProcessingOptions | None = None,
+    cancel_event: Event | None = None,
 ):
-    options = options or ProcessingOptions()
+    options = (options or ProcessingOptions.from_env_or_config()).normalize()
+    check_cancelled(cancel_event)
 
     if not yt_link and not video_path:
         raise ValueError("Informe yt_link ou video_path.")
 
-    if yt_link:
-        _emit(progress_callback, "baixando", 0, "Baixando video...")
+    try:
+        if yt_link:
+            _emit(progress_callback, "baixando", 0, "Baixando video...")
 
-        last_scaled = [0]
+            last_scaled = [0]
 
-        def download_progress(stage, percent, message):
-            scaled = int(percent * 0.1)
-            if scaled == last_scaled[0]:
-                return
-            last_scaled[0] = scaled
-            _emit(progress_callback, stage, scaled, message)
+            def download_progress(stage, percent, message):
+                check_cancelled(cancel_event)
+                scaled = int(percent * 0.1)
+                if scaled == last_scaled[0]:
+                    return
+                last_scaled[0] = scaled
+                _emit(progress_callback, stage, scaled, message)
 
-        video_path = downloader.download_video(
-            yt_link,
-            diretorio_saida=output_dir or str(OUTPUT_DIR),
-            progress_callback=download_progress if progress_callback else None,
-        )
-        if not video_path:
-            raise RuntimeError("Falha ao baixar o video.")
-
-    video_path = str(video_path)
-    video_stem = Path(video_path).stem
-    out_root = Path(output_dir) if output_dir else OUTPUT_DIR
-    out_dir = out_root / video_stem
-
-    whisper_model = (options.whisper_model or WHISPER_MODEL).strip() or WHISPER_MODEL
-    min_dur = int(options.min_clip_duration or MIN_CLIP_DURATION)
-    max_dur = max(min_dur, int(options.max_clip_duration or MAX_CLIP_DURATION))
-    pause_gap = float(options.pause_gap if options.pause_gap is not None else PAUSE_GAP)
-
-    key = cache.make_key(
-        video_path,
-        whisper_model,
-        LANGUAGE,
-        WHISPER_COMPUTE_TYPE,
-        word_timestamps=options.captions_enabled
-        and options.caption_transcribe_mode == "full",
-    )
-
-    segments = None if force else cache.load_transcript(out_dir, key)
-    if segments is not None:
-        _emit(
-            progress_callback,
-            "transcricao",
-            20,
-            "Transcricao em cache, pulando...",
-        )
-    else:
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            _emit(progress_callback, "audio", 15, "Extraindo audio...")
-            audio_path = audio.extract_audio(video_path, tmp_dir)
-
-            _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
-            segments = transcriber.transcribe(
-                audio_path,
-                word_timestamps=options.captions_enabled
-                and options.caption_transcribe_mode == "full",
-                model_name=whisper_model,
+            video_path = downloader.download_video(
+                yt_link,
+                diretorio_saida=output_dir or str(OUTPUT_DIR),
+                progress_callback=download_progress if progress_callback else None,
+                cancel_event=cancel_event,
             )
+            if not video_path:
+                raise RuntimeError("Falha ao baixar o video.")
 
-        cache.save_transcript(out_dir, key, segments)
+        check_cancelled(cancel_event)
+        video_path = str(video_path)
+        video_stem = Path(video_path).stem
+        out_root = Path(output_dir) if output_dir else OUTPUT_DIR
+        out_dir = out_root / video_stem
 
-
-    if segments:
-        focus = (options.focus_instruction or "").strip()
-        msg = f"Analisando com IA (foco: {focus[:60]})..." if focus else "Analisando com IA..."
-        _emit(progress_callback, "analise", 50, msg)
-        clips = ai_analyzer.analyze(
-            segments,
-            progress_callback=progress_callback,
-            focus=focus,
-            max_clips=options.max_clips,
-            min_viral_score=options.min_viral_score,
-            min_clip_duration=min_dur,
-            max_clip_duration=max_dur,
+        key = cache.make_key(
+            video_path,
+            options.whisper_model,
+            options.language,
+            options.whisper_compute_type,
+            word_timestamps=options.captions_enabled
+            and options.caption_transcribe_mode == "full",
         )
-    else:
-        clips = []
 
-    _emit(progress_callback, "normalizacao", 65, "Ajustando duracao dos clipes...")
-    total_duration = video_ops.get_duration(video_path)
-    clips = normalize_clips(
-        clips,
-        segments,
-        total_duration,
-        min_dur,
-        max_dur,
-        pause_gap,
-    )
+        segments = None if force else cache.load_transcript(out_dir, key)
+        if segments is not None:
+            _emit(
+                progress_callback,
+                "transcricao",
+                20,
+                "Transcricao em cache, pulando...",
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="autocut_pipeline_") as tmp_dir:
+                check_cancelled(cancel_event)
+                _emit(progress_callback, "audio", 15, "Extraindo audio...")
+                audio_path = audio.extract_audio(
+                    video_path, tmp_dir, cancel_event=cancel_event
+                )
 
-    _emit(progress_callback, "corte", 70, "Cortando clipes...")
-    clip_paths = video_ops.cut_all(
-        video_path,
-        clips,
-        total_duration,
-        out_dir,
-        options=options,
-        segments=segments,
-        progress_callback=progress_callback,
-    )
+                check_cancelled(cancel_event)
+                _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
+                segments = transcriber.transcribe(
+                    audio_path,
+                    word_timestamps=options.captions_enabled
+                    and options.caption_transcribe_mode == "full",
+                    model_name=options.whisper_model,
+                    language=options.language,
+                    compute_type=options.whisper_compute_type,
+                    cancel_event=cancel_event,
+                )
 
-    _emit(progress_callback, "relatorio", 95, "Gerando relatorio...")
-    report_path = save_report(clips, out_dir, clip_paths)
+            cache.save_transcript(out_dir, key, segments)
 
-    _emit(progress_callback, "concluido", 100, "Concluido")
+        check_cancelled(cancel_event)
+        if segments:
+            focus = options.focus_instruction
+            msg = (
+                f"Analisando com IA (foco: {focus[:60]})..."
+                if focus
+                else "Analisando com IA..."
+            )
+            _emit(progress_callback, "analise", 50, msg)
+            clips = ai_analyzer.analyze(
+                segments,
+                progress_callback=progress_callback,
+                options=options,
+                cancel_event=cancel_event,
+            )
+        else:
+            clips = []
 
-    return {"clips": clips, "clip_paths": clip_paths, "report_path": report_path}
+        check_cancelled(cancel_event)
+        _emit(progress_callback, "normalizacao", 65, "Ajustando duracao dos clipes...")
+        total_duration = video_ops.get_duration(video_path)
+        clips = normalize_clips(
+            clips,
+            segments,
+            total_duration,
+            options.min_clip_duration,
+            options.max_clip_duration,
+            options.pause_gap,
+        )
+
+        check_cancelled(cancel_event)
+        _emit(progress_callback, "corte", 70, "Cortando clipes...")
+        clip_paths = video_ops.cut_all(
+            video_path,
+            clips,
+            total_duration,
+            out_dir,
+            options=options,
+            segments=segments,
+            progress_callback=progress_callback,
+            cancel_event=cancel_event,
+        )
+
+        check_cancelled(cancel_event)
+        _emit(progress_callback, "relatorio", 95, "Gerando relatorio...")
+        report_path = save_report(clips, out_dir, clip_paths)
+
+        _emit(progress_callback, "concluido", 100, "Concluido")
+
+        return {
+            "clips": clips,
+            "clip_paths": clip_paths,
+            "report_path": report_path,
+        }
+    finally:
+        _cleanup_temp_residuals()
 
 
 def _cli_progress(stage, percent, message):
@@ -163,12 +191,16 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    entrada = ({"yt_link": args.alvo} if args.alvo.startswith(("http://", "https://"))
-               else {"video_path": args.alvo})
+    entrada = (
+        {"yt_link": args.alvo}
+        if args.alvo.startswith(("http://", "https://"))
+        else {"video_path": args.alvo}
+    )
 
-    options = ProcessingOptions()
-    options.captions_enabled = args.captions
-    options.focus_instruction = args.foco
+    options = ProcessingOptions.from_env_or_config(
+        captions_enabled=args.captions,
+        focus_instruction=args.foco,
+    )
 
     try:
         result = run(
@@ -177,6 +209,9 @@ if __name__ == "__main__":
             options=options,
             **entrada,
         )
+    except PipelineCancelledError as exc:
+        print(f"Cancelado: {exc}", file=sys.stderr, flush=True)
+        raise SystemExit(130)
     except Exception as exc:
         print(f"Erro: {exc}", file=sys.stderr, flush=True)
         raise SystemExit(1)
