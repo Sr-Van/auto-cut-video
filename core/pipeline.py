@@ -92,7 +92,7 @@ def run(
 
 
     if segments:
-        _emit(progress_callback, "analise", 50, "Analisando com Gemini...")
+        _emit(progress_callback, "analise", 50, "Analisando com IA...")
         clips = ai_analyzer.analyze(segments, progress_callback=progress_callback)
     else:
         clips = []

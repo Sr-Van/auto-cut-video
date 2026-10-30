@@ -41,7 +41,7 @@ LOG_MAX_LINES = 500
 PIPE_STEPS = [
     ("Entrada", "download / áudio", {"baixando", "audio", "iniciando", "upload"}),
     ("Transcrição", "Whisper", {"transcricao"}),
-    ("Análise", "Gemini", {"analise", "normalizacao"}),
+    ("Análise", "IA", {"analise", "normalizacao"}),
     ("Corte", "9:16 + legendas", {"corte", "clipes"}),
     ("Relatório", "JSON + CSV", {"relatorio"}),
 ]
@@ -52,7 +52,7 @@ STAGE_LABELS = {
     "baixando": "Baixando vídeo",
     "audio": "Extraindo áudio",
     "transcricao": "Transcrevendo",
-    "analise": "Analisando com Gemini",
+    "analise": "Analisando com IA",
     "normalizacao": "Ajustando duração",
     "corte": "Cortando clipes",
     "clipes": "Renderizando clipes",

@@ -1,4 +1,4 @@
 PySide6
 faster-whisper
-google-genai
+httpx
 python-dotenv

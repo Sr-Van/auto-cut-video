@@ -9,10 +9,124 @@ load_dotenv()
 BASE_DIR = Path(__file__).resolve().parent.parent
 OUTPUT_DIR = BASE_DIR / "output"
 
+# Catalogo de provedores compativeis com o padrao OpenAI (/chat/completions).
+PROVIDERS_CATALOG: dict[str, dict] = {
+    "openrouter": {
+        "name": "OpenRouter",
+        "base_url": "https://openrouter.ai/api/v1",
+        "models": [
+            "poolside/laguna-s-2.1:free",
+            "nvidia/nemotron-3.5-super-vl:free",
+            "dots-studio/dots-3-note-preview:free",
+            "recursive/flint-v1.0:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "nvidia/nemotron-3.5-lightning:free",
+            "google/gemma-4-31b-it:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "xingchen-agi/xing4.0-29b-a4b:free",
+        ],
+    },
+    "groq": {
+        "name": "Groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "models": [
+            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-120b",
+            "llama-3.1-8b-instant",
+        ],
+    },
+    "cerebras": {
+        "name": "Cerebras",
+        "base_url": "https://api.cerebras.ai/v1",
+        "models": [
+            "llama-3.3-70b",
+            "gpt-oss-120b",
+            "llama3.1-8b",
+        ],
+    },
+    "mistral": {
+        "name": "Mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "models": [
+            "mistral-small-latest",
+            "mistral-large-latest",
+        ],
+    },
+    "google": {
+        "name": "Google AI Studio",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "models": [
+            "gemini-3.5-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-2.5-flash",
+        ],
+    },
+}
+
+_PROVIDER_ENV_MAP = [
+    ("openrouter", ("OPENROUTER_API_KEY", "OPENROUTER_API_KEYS")),
+    ("groq", ("GROQ_API_KEY", "GROQ_API_KEYS")),
+    ("cerebras", ("CEREBRAS_API_KEY", "CEREBRAS_API_KEYS")),
+    ("mistral", ("MISTRAL_API_KEY", "MISTRAL_API_KEYS")),
+    ("google", ("GOOGLE_API_KEY", "GOOGLE_API_KEYS", "GEMINI_API_KEY", "GEMINI_API_KEYS")),
+]
+
+AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()
+AI_BASE_URL = os.getenv("AI_BASE_URL", "").strip()
+AI_MODELS = [
+    m.strip()
+    for m in re.split(r"[,\s]+", os.getenv("AI_MODELS", ""))
+    if m.strip()
+]
+
+
+def detect_provider(raw_key: str) -> tuple[str, str]:
+    """Retorna (provider_id, api_key_limpa) a partir do prefixo ou formato da chave."""
+    text = (raw_key or "").strip()
+    if ":" in text:
+        prefix, rest = text.split(":", 1)
+        prov = prefix.strip().lower()
+        if prov == "gemini":
+            prov = "google"
+        if prov in PROVIDERS_CATALOG and rest.strip():
+            return prov, rest.strip()
+
+    if text.startswith("sk-or-"):
+        return "openrouter", text
+    if text.startswith("gsk_"):
+        return "groq", text
+    if text.startswith("csk-"):
+        return "cerebras", text
+    if text.startswith(("AIza", "AQ.")):
+        return "google", text
+    if AI_PROVIDER in PROVIDERS_CATALOG:
+        return AI_PROVIDER, text
+    if re.fullmatch(r"[A-Za-z0-9]{32}", text):
+        return "mistral", text
+    if AI_BASE_URL:
+        return "openrouter", text
+    return "google", text
+
 
 def _load_api_keys() -> list[str]:
-    """Le chaves em API_KEY_1..N, API_KEYS (virgula/espaco) e API_KEY (legado)."""
+    """Le chaves em variaveis por provedor, API_KEY_1..N, API_KEYS e API_KEY."""
     keys: list[str] = []
+
+    for provider, env_names in _PROVIDER_ENV_MAP:
+        for env_name in env_names:
+            for part in re.split(r"[,\s]+", os.getenv(env_name, "")):
+                val = part.strip()
+                if not val:
+                    continue
+                detected, clean = detect_provider(val)
+                if detected == provider and not val.startswith(f"{provider}:"):
+                    keys.append(val)
+                else:
+                    keys.append(f"{provider}:{clean}")
 
     numbered: list[tuple[int, str]] = []
     for name, value in os.environ.items():
@@ -29,11 +143,13 @@ def _load_api_keys() -> list[str]:
     if single:
         keys.append(single)
 
-    seen: set[str] = set()
+    seen: set[tuple[str, str]] = set()
     unique: list[str] = []
     for key in keys:
-        if key not in seen:
-            seen.add(key)
+        prov, clean = detect_provider(key)
+        dedup_key = (prov, clean)
+        if clean and dedup_key not in seen:
+            seen.add(dedup_key)
             unique.append(key)
     return unique
 
@@ -41,21 +157,22 @@ def _load_api_keys() -> list[str]:
 API_KEYS = _load_api_keys()
 # Mantido por compatibilidade (primeira chave configurada).
 API_KEY = API_KEYS[0] if API_KEYS else ""
-# Lista de fallback: se um modelo falhar, tenta o proximo da lista.
-MODELOS_GEMINI = [
-    "gemini-3.8-flash",      # Mais recente e inteligente da linha Flash
-    "gemini-3.7-flash",      # Versão anterior excelente
-    "gemini-3.6-flash",      # Versão equilibrada
-    "gemini-3.5-flash",      # Versão anterior de texto
-    "gemini-3.5-flash-lite", # Versão leve com maior limite de RPM (15)
-    "gemini-3.1-flash-lite", # Versão leve alternativa
-]
-# Mantido por compatibilidade (primeiro modelo da lista).
+
+# Modelos Gemini reais (mantido por compatibilidade com imports existentes).
+MODELOS_GEMINI = list(PROVIDERS_CATALOG["google"]["models"])
 MODELO_GEMINI = MODELOS_GEMINI[0]
-GEMINI_MAX_ATTEMPTS = int(os.getenv("GEMINI_MAX_ATTEMPTS", "4"))
-GEMINI_TIMEOUT_S = float(os.getenv("GEMINI_TIMEOUT_S", "120"))
-GEMINI_BACKOFF_BASE = float(os.getenv("GEMINI_BACKOFF_BASE", "2"))
-GEMINI_BACKOFF_MAX = float(os.getenv("GEMINI_BACKOFF_MAX", "60"))
+
+AI_MAX_ATTEMPTS = int(os.getenv("AI_MAX_ATTEMPTS", os.getenv("GEMINI_MAX_ATTEMPTS", "4")))
+AI_TIMEOUT_S = float(os.getenv("AI_TIMEOUT_S", os.getenv("GEMINI_TIMEOUT_S", "120")))
+AI_BACKOFF_BASE = float(os.getenv("AI_BACKOFF_BASE", os.getenv("GEMINI_BACKOFF_BASE", "2")))
+AI_BACKOFF_MAX = float(os.getenv("AI_BACKOFF_MAX", os.getenv("GEMINI_BACKOFF_MAX", "60")))
+
+# Aliases legados
+GEMINI_MAX_ATTEMPTS = AI_MAX_ATTEMPTS
+GEMINI_TIMEOUT_S = AI_TIMEOUT_S
+GEMINI_BACKOFF_BASE = AI_BACKOFF_BASE
+GEMINI_BACKOFF_MAX = AI_BACKOFF_MAX
+
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "large")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "auto")
 TEMPERATURA = 0.3
