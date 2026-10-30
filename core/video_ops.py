@@ -113,11 +113,13 @@ def _transcribe_clip_words(
     cut_end: float,
     out_dir: Path,
     index: int,
+    whisper_model: str | None = None,
 ) -> list[captions.CaptionWord]:
     """Retranscreve so o trecho do clipe (timing local, mais preciso) com cache."""
+    chosen_model = (whisper_model or WHISPER_MODEL).strip() or WHISPER_MODEL
     cache_dir = out_dir / ".cache"
     key = cache.make_clip_key(
-        video_path, cut_start, cut_end, WHISPER_MODEL, LANGUAGE, WHISPER_COMPUTE_TYPE
+        video_path, cut_start, cut_end, chosen_model, LANGUAGE, WHISPER_COMPUTE_TYPE
     )
     path = cache.clip_transcript_path(cache_dir, index)
 
@@ -125,7 +127,9 @@ def _transcribe_clip_words(
     if segments is None:
         with tempfile.TemporaryDirectory(prefix="autocut_audio_") as tmp_dir:
             wav_path = audio.extract_audio_segment(video_path, cut_start, cut_end, tmp_dir)
-            segments = transcriber.transcribe(wav_path, word_timestamps=True)
+            segments = transcriber.transcribe(
+                wav_path, word_timestamps=True, model_name=chosen_model
+            )
         cache.save_transcript_file(path, key, segments)
 
     words: list[captions.CaptionWord] = []
@@ -150,7 +154,14 @@ def _clip_words(
     segments,
 ):
     if options.caption_transcribe_mode == "clip":
-        return _transcribe_clip_words(video_path, cut_start, cut_end, out_dir, index)
+        return _transcribe_clip_words(
+            video_path,
+            cut_start,
+            cut_end,
+            out_dir,
+            index,
+            whisper_model=options.whisper_model,
+        )
     if segments:
         return captions.words_in_window(segments, cut_start, cut_end)
     return []

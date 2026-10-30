@@ -288,6 +288,30 @@ class MainWindow(QMainWindow):
 
         panel.body.addWidget(self.source_stack)
 
+        # --- regra extra (foco da analise)
+        focus_box = QVBoxLayout()
+        focus_box.setSpacing(6)
+        focus_box.addWidget(label("Foco da análise (opcional)", "FieldLabel"))
+        self.focus_input = QPlainTextEdit()
+        self.focus_input.setPlaceholderText(
+            "Ex.: Quero focar nas partes engraçadas · Quero polêmica e discussão · "
+            "O tema é educação financeira, foque em mensagens diretas e instrutivas"
+        )
+        self.focus_input.setPlainText(self.options.focus_instruction)
+        self.focus_input.setFixedHeight(64)
+        self.focus_input.setTabChangesFocus(True)
+        self.focus_input.textChanged.connect(self._on_focus_edited)
+        focus_box.addWidget(self.focus_input)
+        focus_box.addWidget(
+            label(
+                "Vira uma REGRA EXTRA para a IA: ela prioriza trechos alinhados, "
+                "se existirem no vídeo.",
+                "Faint",
+                wrap=True,
+            )
+        )
+        panel.body.addLayout(focus_box)
+
         # --- pasta de saída
         out_box = QVBoxLayout()
         out_box.setSpacing(6)
@@ -425,6 +449,7 @@ class MainWindow(QMainWindow):
             ("encoder", "Encoder"),
             ("caption", "Legenda"),
             ("transcribe", "Transcrição"),
+            ("cuts", "Cortes"),
         ]
         for index, (key, title) in enumerate(rows):
             if index:
@@ -585,6 +610,10 @@ class MainWindow(QMainWindow):
             self._save_options()
             self._refresh_summary()
 
+    def _on_focus_edited(self):
+        self.options.focus_instruction = self.focus_input.toPlainText().strip()
+        self._save_options()
+
     def _save_options(self):
         self.settings.setValue("processing_options", self.options.to_json())
 
@@ -604,6 +633,10 @@ class MainWindow(QMainWindow):
             ),
             "transcribe": TRANSCRIBE_LABELS.get(
                 o.caption_transcribe_mode, o.caption_transcribe_mode
+            ),
+            "cuts": (
+                f"até {o.max_clips} · nota >= {o.min_viral_score} · "
+                f"{o.min_clip_duration}–{o.max_clip_duration}s"
             ),
         }
         for key, value in values.items():
@@ -633,6 +666,7 @@ class MainWindow(QMainWindow):
             step.set_state("idle")
 
         self.options.captions_enabled = self.captions_checkbox.isChecked()
+        self.options.focus_instruction = self.focus_input.toPlainText().strip()
         self._save_options()
 
         self.worker = PipelineWorker(
@@ -659,6 +693,7 @@ class MainWindow(QMainWindow):
         self.summary_edit_button.setEnabled(not busy)
         self.captions_checkbox.setEnabled(not busy)
         self.video_link.setEnabled(not busy)
+        self.focus_input.setReadOnly(busy)
         self.source_tabs.setEnabled(not busy)
         self.process_button.setText(
             "Processando..." if busy else "▶   Processar vídeo"

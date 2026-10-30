@@ -30,20 +30,25 @@ _INIT_LOCK = Lock()
 _RUN_LOCK = Lock()
 
 
-def get_model() -> WhisperModel:
+def get_model(model_name: str | None = None) -> WhisperModel:
     global _MODEL, _MODEL_KEY
+    chosen = (model_name or WHISPER_MODEL).strip() or WHISPER_MODEL
     with _INIT_LOCK:
-        key = (WHISPER_MODEL, WHISPER_COMPUTE_TYPE)
+        key = (chosen, WHISPER_COMPUTE_TYPE)
         if _MODEL is None or _MODEL_KEY != key:
             _MODEL = WhisperModel(
-                WHISPER_MODEL, device="auto", compute_type=WHISPER_COMPUTE_TYPE
+                chosen, device="auto", compute_type=WHISPER_COMPUTE_TYPE
             )
             _MODEL_KEY = key
         return _MODEL
 
 
-def transcribe(audio_path: str, word_timestamps: bool = False) -> list[Segment]:
-    model = get_model()
+def transcribe(
+    audio_path: str,
+    word_timestamps: bool = False,
+    model_name: str | None = None,
+) -> list[Segment]:
+    model = get_model(model_name)
     # O modelo e compartilhado entre threads (clipes em paralelo), entao a
     # inferencia e serializada. A geracao precisa ser consumida sob o lock,
     # pois o trabalho de fato acontece durante a iteracao.

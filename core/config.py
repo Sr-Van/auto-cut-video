@@ -15,15 +15,15 @@ PROVIDERS_CATALOG: dict[str, dict] = {
         "name": "OpenRouter",
         "base_url": "https://openrouter.ai/api/v1",
         "models": [
-            "poolside/laguna-s-2.1:free",
+            "google/gemma-4-31b-it:free",
             "nvidia/nemotron-3.5-super-vl:free",
             "dots-studio/dots-3-note-preview:free",
             "recursive/flint-v1.0:free",
             "nvidia/nemotron-3-ultra-550b-a55b:free",
             "nvidia/nemotron-3.5-lightning:free",
-            "google/gemma-4-31b-it:free",
             "google/gemma-4-26b-a4b-it:free",
             "xingchen-agi/xing4.0-29b-a4b:free",
+            "poolside/laguna-s-2.1:free",
         ],
     },
     "groq": {
@@ -95,21 +95,23 @@ def detect_provider(raw_key: str) -> tuple[str, str]:
         if prov in PROVIDERS_CATALOG and rest.strip():
             return prov, rest.strip()
 
-    if text.startswith("sk-or-"):
-        return "openrouter", text
-    if text.startswith("gsk_"):
-        return "groq", text
-    if text.startswith("csk-"):
-        return "cerebras", text
-    if text.startswith(("AIza", "AQ.")):
-        return "google", text
-    if AI_PROVIDER in PROVIDERS_CATALOG:
-        return AI_PROVIDER, text
-    if re.fullmatch(r"[A-Za-z0-9]{32}", text):
-        return "mistral", text
-    if AI_BASE_URL:
-        return "openrouter", text
-    return "google", text
+    match text:
+        case _ if text.startswith("sk-or-"):
+            return "openrouter", text
+        case _ if text.startswith("gsk_"):
+            return "groq", text
+        case _ if text.startswith("csk-"):
+            return "cerebras", text
+        case _ if text.startswith(("AIza", "AQ.")):
+            return "google", text
+        case _ if AI_PROVIDER in PROVIDERS_CATALOG:
+            return AI_PROVIDER, text
+        case _ if re.fullmatch(r"[A-Za-z0-9]{32}", text):
+            return "mistral", text
+        case _ if AI_BASE_URL:
+            return "openrouter", text
+        case _:
+            return "google", text
 
 
 def _load_api_keys() -> list[str]:

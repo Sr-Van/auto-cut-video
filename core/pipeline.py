@@ -59,9 +59,14 @@ def run(
     out_root = Path(output_dir) if output_dir else OUTPUT_DIR
     out_dir = out_root / video_stem
 
+    whisper_model = (options.whisper_model or WHISPER_MODEL).strip() or WHISPER_MODEL
+    min_dur = int(options.min_clip_duration or MIN_CLIP_DURATION)
+    max_dur = max(min_dur, int(options.max_clip_duration or MAX_CLIP_DURATION))
+    pause_gap = float(options.pause_gap if options.pause_gap is not None else PAUSE_GAP)
+
     key = cache.make_key(
         video_path,
-        WHISPER_MODEL,
+        whisper_model,
         LANGUAGE,
         WHISPER_COMPUTE_TYPE,
         word_timestamps=options.captions_enabled
@@ -86,14 +91,25 @@ def run(
                 audio_path,
                 word_timestamps=options.captions_enabled
                 and options.caption_transcribe_mode == "full",
+                model_name=whisper_model,
             )
 
         cache.save_transcript(out_dir, key, segments)
 
 
     if segments:
-        _emit(progress_callback, "analise", 50, "Analisando com IA...")
-        clips = ai_analyzer.analyze(segments, progress_callback=progress_callback)
+        focus = (options.focus_instruction or "").strip()
+        msg = f"Analisando com IA (foco: {focus[:60]})..." if focus else "Analisando com IA..."
+        _emit(progress_callback, "analise", 50, msg)
+        clips = ai_analyzer.analyze(
+            segments,
+            progress_callback=progress_callback,
+            focus=focus,
+            max_clips=options.max_clips,
+            min_viral_score=options.min_viral_score,
+            min_clip_duration=min_dur,
+            max_clip_duration=max_dur,
+        )
     else:
         clips = []
 
@@ -103,9 +119,9 @@ def run(
         clips,
         segments,
         total_duration,
-        MIN_CLIP_DURATION,
-        MAX_CLIP_DURATION,
-        PAUSE_GAP,
+        min_dur,
+        max_dur,
+        pause_gap,
     )
 
     _emit(progress_callback, "corte", 70, "Cortando clipes...")
@@ -142,6 +158,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--captions", action="store_true", help="Gera legendas dinamicas"
     )
+    parser.add_argument(
+        "--foco", default="", help="Regra extra: em que a IA deve focar"
+    )
     args = parser.parse_args()
 
     entrada = ({"yt_link": args.alvo} if args.alvo.startswith(("http://", "https://"))
@@ -149,6 +168,7 @@ if __name__ == "__main__":
 
     options = ProcessingOptions()
     options.captions_enabled = args.captions
+    options.focus_instruction = args.foco
 
     try:
         result = run(

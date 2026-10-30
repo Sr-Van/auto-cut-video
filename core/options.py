@@ -56,6 +56,16 @@ class ProcessingOptions:
     # cada clipe (mais preciso, so faz sentido com GPU).
     caption_transcribe_mode: str = "clip"
 
+    # --- Cortes & IA ---
+    max_clips: int = cfg.MAX_CLIPS
+    min_viral_score: int = cfg.MIN_VIRAL_SCORE
+    min_clip_duration: int = cfg.MIN_CLIP_DURATION
+    max_clip_duration: int = cfg.MAX_CLIP_DURATION
+    pause_gap: float = float(cfg.PAUSE_GAP)
+    whisper_model: str = cfg.WHISPER_MODEL
+    # Instrucao livre do usuario sobre em que focar (vira "REGRA EXTRA" no prompt).
+    focus_instruction: str = ""
+
     def to_dict(self) -> dict:
         return asdict(self)
 

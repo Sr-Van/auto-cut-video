@@ -155,13 +155,14 @@ class SettingsDialog(QDialog):
         root.addWidget(head)
 
         # --- abas sublinhadas (.settings-tabs)
-        self.tabs = UnderlineTabs(["Video", "Legenda"])
+        self.tabs = UnderlineTabs(["Video", "Legenda", "Cortes & IA"])
         root.addWidget(self.tabs)
 
         # --- corpo rolavel (.settings-scroll)
         self.stack = QStackedWidget()
         self.stack.addWidget(self._wrap_scroll(self._build_video_tab()))
         self.stack.addWidget(self._wrap_scroll(self._build_caption_tab()))
+        self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))
         self.tabs.changed.connect(self.stack.setCurrentIndex)
         root.addWidget(self.stack, 1)
 
@@ -437,6 +438,120 @@ class SettingsDialog(QDialog):
 
         return pane
 
+    def _build_cuts_tab(self) -> QWidget:
+        pane = QWidget()
+        pane.setObjectName("Root")
+        layout = QVBoxLayout(pane)
+        layout.setContentsMargins(26, 22, 26, 22)
+        layout.setSpacing(14)
+
+        layout.addWidget(label("SELECAO E IA", "SectionTitle"))
+
+        grid1 = QGridLayout()
+        grid1.setHorizontalSpacing(14)
+        grid1.setVerticalSpacing(14)
+
+        self.max_clips = QSpinBox()
+        self.max_clips.setRange(1, 50)
+        grid1.addWidget(
+            _field_box("Maximo de clipes", self.max_clips, "1 – 50"), 0, 0
+        )
+
+        self.min_viral_score = QSpinBox()
+        self.min_viral_score.setRange(1, 10)
+        grid1.addWidget(
+            _field_box("Nota minima (viral)", self.min_viral_score, "1 – 10"),
+            0,
+            1,
+        )
+
+        self.whisper_model = QComboBox()
+        for w_label, w_val in (
+            ("large · mais preciso", "large"),
+            ("turbo · rapido e preciso", "turbo"),
+            ("medium · equilibrado", "medium"),
+            ("small · leve", "small"),
+            ("base · muito leve", "base"),
+            ("tiny · ultra rapido", "tiny"),
+        ):
+            self.whisper_model.addItem(w_label, w_val)
+        grid1.addWidget(
+            _field_box("Modelo Whisper", self.whisper_model), 0, 2
+        )
+
+        layout.addLayout(grid1)
+        layout.addWidget(separator())
+        layout.addWidget(label("DURACAO E RECORTE", "SectionTitle"))
+
+        grid2 = QGridLayout()
+        grid2.setHorizontalSpacing(14)
+        grid2.setVerticalSpacing(14)
+
+        self.min_clip_duration = QSpinBox()
+        self.min_clip_duration.setRange(10, 180)
+        self.min_clip_duration.setSingleStep(5)
+        self.min_clip_duration.valueChanged.connect(self._on_min_duration_changed)
+        grid2.addWidget(
+            _field_box("Duracao minima", self.min_clip_duration, "10 – 180s"),
+            0,
+            0,
+        )
+
+        self.max_clip_duration = QSpinBox()
+        self.max_clip_duration.setRange(15, 300)
+        self.max_clip_duration.setSingleStep(5)
+        self.max_clip_duration.valueChanged.connect(self._on_max_duration_changed)
+        grid2.addWidget(
+            _field_box("Duracao maxima", self.max_clip_duration, "15 – 300s"),
+            0,
+            1,
+        )
+
+        self.pause_gap = QDoubleSpinBox()
+        self.pause_gap.setRange(0.2, 10.0)
+        self.pause_gap.setSingleStep(0.1)
+        self.pause_gap.setDecimals(1)
+        grid2.addWidget(
+            _field_box("Pausa para corte", self.pause_gap, "0.2 – 10s"), 0, 2
+        )
+
+        self.padding_s = QDoubleSpinBox()
+        self.padding_s.setRange(0.0, 30.0)
+        self.padding_s.setSingleStep(0.5)
+        self.padding_s.setDecimals(1)
+        grid2.addWidget(
+            _field_box("Margem (padding)", self.padding_s, "0 – 30s"), 1, 0
+        )
+
+        self.max_workers = QSpinBox()
+        self.max_workers.setRange(1, 8)
+        grid2.addWidget(
+            _field_box("Renderizacao paralela", self.max_workers, "1 – 8"),
+            1,
+            1,
+        )
+
+        layout.addLayout(grid2)
+
+        note = label(
+            "A IA prioriza cortes nota 10, mas mantem todos os trechos independentes que atingirem a "
+            "nota minima (ate o teto de clipes). A duracao e ajustada automaticamente priorizando "
+            "pausas naturais da fala.",
+            "Note",
+            wrap=True,
+        )
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return pane
+
+    def _on_min_duration_changed(self, value: int):
+        if hasattr(self, "max_clip_duration") and value > self.max_clip_duration.value():
+            self.max_clip_duration.setValue(value)
+
+    def _on_max_duration_changed(self, value: int):
+        if hasattr(self, "min_clip_duration") and value < self.min_clip_duration.value():
+            self.min_clip_duration.setValue(value)
+
     @staticmethod
     def _wrap(layout) -> QWidget:
         holder = QWidget()
@@ -571,6 +686,27 @@ class SettingsDialog(QDialog):
                 self.caption_transcribe_mode.setCurrentIndex(idx)
                 break
 
+        self.max_clips.setValue(options.max_clips)
+        self.min_viral_score.setValue(options.min_viral_score)
+        self.min_clip_duration.setValue(options.min_clip_duration)
+        self.max_clip_duration.setValue(
+            max(options.min_clip_duration, options.max_clip_duration)
+        )
+        self.pause_gap.setValue(options.pause_gap)
+        self.padding_s.setValue(options.padding_s)
+        self.max_workers.setValue(options.max_workers)
+
+        w_model = (options.whisper_model or "large").strip()
+        w_found = False
+        for idx in range(self.whisper_model.count()):
+            if self.whisper_model.itemData(idx) == w_model:
+                self.whisper_model.setCurrentIndex(idx)
+                w_found = True
+                break
+        if not w_found:
+            self.whisper_model.insertItem(0, w_model, w_model)
+            self.whisper_model.setCurrentIndex(0)
+
     def _apply_preset(self):
         name = self.caption_preset.currentText()
         if name not in PRESETS:
@@ -615,6 +751,20 @@ class SettingsDialog(QDialog):
         options.caption_transcribe_mode = (
             self.caption_transcribe_mode.currentData()
             or self.caption_transcribe_mode.currentText()
+        )
+        options.max_clips = self.max_clips.value()
+        options.min_viral_score = self.min_viral_score.value()
+        options.min_clip_duration = self.min_clip_duration.value()
+        options.max_clip_duration = max(
+            options.min_clip_duration, self.max_clip_duration.value()
+        )
+        options.pause_gap = self.pause_gap.value()
+        options.padding_s = self.padding_s.value()
+        options.max_workers = self.max_workers.value()
+        options.whisper_model = (
+            self.whisper_model.currentData()
+            or self.whisper_model.currentText().strip()
+            or "large"
         )
 
     def _apply(self):
