@@ -1,28 +1,43 @@
-import json
+from __future__ import annotations
+
 import random
-import re
 import time
-from dataclasses import dataclass
+from threading import Event
+from typing import TYPE_CHECKING
 
 import httpx
 
 from core.config import (
     AI_BACKOFF_BASE,
     AI_BACKOFF_MAX,
-    AI_BASE_URL,
     AI_MAX_ATTEMPTS,
-    AI_MODELS,
-    AI_TIMEOUT_S,
     API_KEYS,
     MAX_CLIP_DURATION,
     MAX_CLIPS,
     MIN_CLIP_DURATION,
     MIN_VIRAL_SCORE,
-    PROVIDERS_CATALOG,
     TEMPERATURA,
-    detect_provider,
+)
+from core.exceptions import (
+    PipelineCancelledError,
+    check_cancelled,
+    sleep_with_cancel,
+)
+from core.providers import (
+    APIHTTPError,
+    KeyTarget,
+    extract_json,
+    get_http_client,
+    get_openrouter_models,
+    get_provider,
+    is_schema_unsupported,
+    resolve_targets,
+    status_code_from_exc,
 )
 from utils.timefmt import seconds_to_hhmmss
+
+if TYPE_CHECKING:
+    from core.options import ProcessingOptions
 
 RULES = """
 Você é um editor sênior de Shorts/Reels/TikTok especializado na cultura da internet brasileira. Seu trabalho é encontrar os melhores cortes de um vídeo a partir da transcrição com minutagem. Seu objetivo é encontrar TODOS os trechos do vídeo que funcionam como Short — não apenas o melhor. Busque sempre clipes nota 10, mas clipes com nota {MIN_SCORE} ou 9 também são bons e devem ser incluídos. Seja rigoroso na qualidade de cada clipe, mas NÃO limite artificialmente a quantidade: um vídeo longo normalmente rende vários cortes.
@@ -184,27 +199,12 @@ FORMATO JSON OBRIGATÓRIO (responda APENAS com um objeto JSON válido, sem markd
 }
 """
 
-
-@dataclass(frozen=True)
-class _KeyTarget:
-    provider: str
-    provider_name: str
-    api_key: str
-    base_url: str
-    models: tuple[str, ...]
-
-    @property
-    def id(self) -> tuple[str, str]:
-        return (self.provider, self.api_key)
-
-
-class _APIHTTPError(Exception):
-    def __init__(self, status_code: int, message: str, response: httpx.Response | None = None):
-        super().__init__(f"HTTP {status_code}: {message}")
-        self.status_code = status_code
-        self.message = message
-        self.response = response
-
+# Aliases de compatibilidade com implementacao anterior
+_KeyTarget = KeyTarget
+_APIHTTPError = APIHTTPError
+_extract_json = extract_json
+_status_code = status_code_from_exc
+_is_schema_unsupported = is_schema_unsupported
 
 EXTRA_RULE_TEMPLATE = """
 ## REGRA EXTRA (foco definido pelo usuário — PRIORIDADE)
@@ -329,20 +329,6 @@ def _retry_after_seconds(exc) -> float | None:
         return None
 
 
-def _status_code(exc) -> int | None:
-    """Codigo HTTP do erro, se houver."""
-    for attr in ("status_code", "code"):
-        value = getattr(exc, attr, None)
-        if isinstance(value, int):
-            return value
-    response = getattr(exc, "response", None)
-    if response is not None:
-        code = getattr(response, "status_code", None)
-        if isinstance(code, int):
-            return code
-    return None
-
-
 def _is_retryable(exc) -> bool:
     """Retry para 408/429/5xx e falhas de transporte."""
     code = _status_code(exc)
@@ -438,24 +424,6 @@ def _is_auth_error(exc) -> bool:
     return False
 
 
-def _is_schema_unsupported(exc) -> bool:
-    """Indica que o modelo nao aceitou response_format json_schema estrito."""
-    code = _status_code(exc)
-    if code not in (400, 404, 422):
-        return False
-    text = str(exc).lower()
-    markers = (
-        "response_format",
-        "json_schema",
-        "structured",
-        "additionalproperties",
-        "schema",
-        "strict",
-        "no endpoints found",
-    )
-    return any(m in text for m in markers)
-
-
 def _wait_seconds(attempt, retry_after=None) -> float:
     """Backoff exponencial com jitter; Retry-After tem prioridade."""
     if retry_after is not None:
@@ -470,279 +438,67 @@ def _key_label(key: str) -> str:
     return f"...{key[-4:]}" if len(key) > 4 else "(chave)"
 
 
-_OPENROUTER_LIVE_MODELS: tuple[str, ...] | None = None
-_OPENROUTER_EXCLUDED_SUBSTRINGS = (
-    "safety",
-    "moderation",
-    "guard",
-    "embed",
-    "tts",
-    "whisper",
-    "lyria",
-    "inkling",
-    "2.6b",
-    "1b",
-    "3b",
-    "mini-code",
-    "xs-",
-)
-
-
-def _get_openrouter_models(base_url: str, fallback_models: list[str]) -> tuple[str, ...]:
-    """Descobre dinamicamente os modelos :free ativos no OpenRouter, mantendo a prioridade."""
-    global _OPENROUTER_LIVE_MODELS
-    if _OPENROUTER_LIVE_MODELS is not None:
-        return _OPENROUTER_LIVE_MODELS
-
-    client = _get_http_client()
-    if isinstance(getattr(client, "_transport", None), httpx.MockTransport):
-        return tuple(fallback_models)
-
-    try:
-        url = f"{base_url.rstrip('/')}/models"
-        resp = client.get(url, timeout=8.0)
-        if resp.status_code == 200:
-            items = resp.json().get("data") or []
-            live_free: dict[str, int] = {}
-            for item in items:
-                if not isinstance(item, dict):
-                    continue
-                mid = str(item.get("id") or "").strip()
-                if not mid.endswith(":free"):
-                    continue
-                low = mid.lower()
-                if any(bad in low for bad in _OPENROUTER_EXCLUDED_SUBSTRINGS):
-                    continue
-                ctx = int(item.get("context_length") or 0)
-                if ctx < 64000:
-                    continue
-                modality = str((item.get("architecture") or {}).get("modality") or "")
-                if "audio" in modality.split("->")[-1]:
-                    continue
-                live_free[mid] = ctx
-
-            if live_free:
-                ordered: list[str] = [m for m in fallback_models if m in live_free]
-                extras = sorted(
-                    (m for m in live_free if m not in ordered),
-                    key=lambda m: live_free[m],
-                    reverse=True,
-                )
-                _OPENROUTER_LIVE_MODELS = tuple(ordered + extras)
-                return _OPENROUTER_LIVE_MODELS
-    except Exception:
-        pass
-
-    return tuple(fallback_models)
-
-
-def _resolve_targets(raw_keys: list[str]) -> list[_KeyTarget]:
-    targets: list[_KeyTarget] = []
-    for raw in raw_keys:
-        provider, clean_key = detect_provider(raw)
-        if not clean_key:
-            continue
-        info = PROVIDERS_CATALOG.get(provider, PROVIDERS_CATALOG["openrouter"])
-        base_url = AI_BASE_URL or info["base_url"]
-        if AI_MODELS:
-            models = tuple(AI_MODELS)
-        elif provider == "openrouter":
-            models = _get_openrouter_models(base_url, info["models"])
-        else:
-            models = tuple(info["models"])
-        targets.append(
-            _KeyTarget(
-                provider=provider,
-                provider_name=info["name"],
-                api_key=clean_key,
-                base_url=base_url,
-                models=models,
-            )
-        )
-    return targets
-
-
-def _extract_json(raw_text: str) -> dict:
-    """Extrai o JSON de forma resiliente (remove <think> e cercas markdown se houver)."""
-    text = (raw_text or "").strip()
-    if not text:
-        return {"clips": []}
-
-    # Remove blocos de raciocinio <think>...</think>
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-    # Tenta parse direto
-    try:
-        parsed = json.loads(text)
-        return parsed if isinstance(parsed, dict) else {"clips": parsed}
-    except json.JSONDecodeError:
-        pass
-
-    # Remove cercas ```json ... ```
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.DOTALL | re.IGNORECASE)
-    if fenced:
-        inner = fenced.group(1).strip()
-        try:
-            parsed = json.loads(inner)
-            return parsed if isinstance(parsed, dict) else {"clips": parsed}
-        except json.JSONDecodeError:
-            text = inner
-
-    # Procura primeiro '{' e ultimo '}'
-    start_obj = text.find("{")
-    end_obj = text.rfind("}")
-    if start_obj != -1 and end_obj > start_obj:
-        try:
-            parsed = json.loads(text[start_obj : end_obj + 1])
-            if isinstance(parsed, dict):
-                return parsed
-        except json.JSONDecodeError:
-            pass
-
-    start_arr = text.find("[")
-    end_arr = text.rfind("]")
-    if start_arr != -1 and end_arr > start_arr:
-        try:
-            parsed = json.loads(text[start_arr : end_arr + 1])
-            if isinstance(parsed, list):
-                return {"clips": parsed}
-        except json.JSONDecodeError:
-            pass
-
-    raise ValueError("A resposta do modelo nao contem um JSON valido.")
-
-
 _HTTP_CLIENT: httpx.Client | None = None
 
 
 def _get_http_client() -> httpx.Client:
     global _HTTP_CLIENT
-    if _HTTP_CLIENT is None or _HTTP_CLIENT.is_closed:
-        _HTTP_CLIENT = httpx.Client(timeout=httpx.Timeout(AI_TIMEOUT_S))
-    return _HTTP_CLIENT
+    if _HTTP_CLIENT is not None and not _HTTP_CLIENT.is_closed:
+        return _HTTP_CLIENT
+    return get_http_client()
+
+
+def _get_openrouter_models(base_url: str, fallback_models: list[str]) -> tuple[str, ...]:
+    return get_openrouter_models(base_url, fallback_models, client=_get_http_client())
+
+
+def _resolve_targets(
+    raw_keys: list[str],
+    options: ProcessingOptions | None = None,
+) -> list[KeyTarget]:
+    return resolve_targets(raw_keys, options=options, client=_get_http_client())
 
 
 def _post_completion(
-    target: _KeyTarget,
+    target: KeyTarget,
     model: str,
     system_prompt: str,
     transcript_block: str,
     mode: str = "json_schema",
 ) -> dict:
-    url = f"{target.base_url.rstrip('/')}/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {target.api_key}",
-        "Content-Type": "application/json",
-    }
-    if target.provider == "openrouter":
-        headers["HTTP-Referer"] = "https://github.com/autocortesbr"
-        headers["X-Title"] = "AutoCortesBR"
-
-    sys_content = (
-        system_prompt
-        if mode == "json_schema"
-        else system_prompt + SCHEMA_FALLBACK_INSTRUCTION
+    provider = get_provider(target.provider)
+    return provider.post_completion(
+        target.api_key,
+        model,
+        system_prompt,
+        transcript_block,
+        base_url=target.base_url,
+        mode=mode,
+        schema=SCHEMA,
+        fallback_instruction=SCHEMA_FALLBACK_INSTRUCTION,
+        temperature=TEMPERATURA,
+        client=_get_http_client(),
     )
-
-    payload: dict = {
-        "model": model,
-        "temperature": TEMPERATURA,
-        "messages": [
-            {"role": "system", "content": sys_content},
-            {"role": "user", "content": transcript_block},
-        ],
-    }
-
-    if mode == "json_schema":
-        payload["response_format"] = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "clips_response",
-                "strict": True,
-                "schema": SCHEMA,
-            },
-        }
-    elif mode == "json_object":
-        payload["response_format"] = {"type": "json_object"}
-
-    response = _get_http_client().post(url, headers=headers, json=payload)
-
-    if response.status_code >= 400:
-        detail = response.text[:400]
-        try:
-            err_json = response.json()
-            if isinstance(err_json, list) and err_json:
-                err_json = err_json[0]
-            if isinstance(err_json, dict) and "error" in err_json:
-                err_obj = err_json["error"]
-                if isinstance(err_obj, dict):
-                    detail = err_obj.get("message") or detail
-                    meta = err_obj.get("metadata")
-                    if isinstance(meta, dict) and meta.get("raw"):
-                        detail = f"{detail} ({meta['raw']})"
-                elif isinstance(err_obj, str):
-                    detail = err_obj
-        except Exception:
-            pass
-        raise _APIHTTPError(response.status_code, detail, response=response)
-
-    body = response.json()
-    # Alguns gateways (ex.: OpenRouter) podem retornar HTTP 200 contendo {"error": {...}}
-    if isinstance(body, dict) and "error" in body and not body.get("choices"):
-        err_obj = body["error"]
-        code = 502
-        msg = str(err_obj)
-        if isinstance(err_obj, dict):
-            raw_code = err_obj.get("code")
-            if isinstance(raw_code, int) and 400 <= raw_code < 600:
-                code = raw_code
-            msg = err_obj.get("message") or msg
-            meta = err_obj.get("metadata")
-            if isinstance(meta, dict) and meta.get("raw"):
-                msg = f"{msg} ({meta['raw']})"
-        raise _APIHTTPError(code, msg, response=response)
-
-    choices = (body.get("choices") if isinstance(body, dict) else None) or []
-    if not choices:
-        raise _APIHTTPError(502, "Resposta sem choices do provedor.", response=response)
-
-    message = choices[0].get("message") or {}
-    content = message.get("content") or message.get("reasoning") or ""
-    return _extract_json(content)
 
 
 def _call_with_schema_fallback(
-    target: _KeyTarget,
+    target: KeyTarget,
     model: str,
     system_prompt: str,
     transcript_block: str,
 ) -> dict:
-    """Tenta json_schema estrito; se o modelo nao suportar (ou for :free no OpenRouter), usa prompt."""
-    client = _get_http_client()
-    is_mock = isinstance(getattr(client, "_transport", None), httpx.MockTransport)
-    if target.provider == "openrouter" and model.endswith(":free") and not is_mock:
-        return _post_completion(
-            target, model, system_prompt, transcript_block, mode="prompt"
-        )
-
-    try:
-        return _post_completion(
-            target, model, system_prompt, transcript_block, mode="json_schema"
-        )
-    except Exception as exc:
-        if not _is_schema_unsupported(exc):
-            raise
-
-    try:
-        return _post_completion(
-            target, model, system_prompt, transcript_block, mode="json_object"
-        )
-    except Exception as exc:
-        if not _is_schema_unsupported(exc):
-            raise
-
-    return _post_completion(
-        target, model, system_prompt, transcript_block, mode="prompt"
+    """Delega a chamada e o fallback de schema ao provedor obtido via factory."""
+    provider = get_provider(target.provider)
+    return provider.analyze_transcript(
+        target.api_key,
+        model,
+        system_prompt,
+        transcript_block,
+        base_url=target.base_url,
+        schema=SCHEMA,
+        fallback_instruction=SCHEMA_FALLBACK_INSTRUCTION,
+        temperature=TEMPERATURA,
+        client=_get_http_client(),
     )
 
 
@@ -755,13 +511,29 @@ def analyze(
     min_viral_score: int | None = None,
     min_clip_duration: int | None = None,
     max_clip_duration: int | None = None,
+    options: ProcessingOptions | None = None,
+    cancel_event: Event | None = None,
 ) -> list[dict]:
+    check_cancelled(cancel_event)
+
+    if options is not None:
+        if focus is None:
+            focus = options.focus_instruction
+        if max_clips is None:
+            max_clips = options.max_clips
+        if min_viral_score is None:
+            min_viral_score = options.min_viral_score
+        if min_clip_duration is None:
+            min_clip_duration = options.min_clip_duration
+        if max_clip_duration is None:
+            max_clip_duration = options.max_clip_duration
+
     raw_keys = [
         k.strip()
         for k in (api_keys if api_keys is not None else API_KEYS)
         if k and k.strip()
     ]
-    targets = _resolve_targets(raw_keys)
+    targets = _resolve_targets(raw_keys, options=options)
     if not targets:
         raise RuntimeError(
             "Nenhuma API key configurada. Defina API_KEY, API_KEYS ou API_KEY_1 no .env."
@@ -780,7 +552,7 @@ def analyze(
     # Rodada 0: (Chave 1, Modelo 1), (Chave 2, Modelo 1), ...
     # Rodada 1: (Chave 1, Modelo 2), (Chave 2, Modelo 2), ...
     max_model_depth = max(len(t.models) for t in targets)
-    schedule: list[tuple[_KeyTarget, str]] = []
+    schedule: list[tuple[KeyTarget, str]] = []
     for m_idx in range(max_model_depth):
         for target in targets:
             if m_idx < len(target.models):
@@ -802,6 +574,8 @@ def analyze(
             overloaded_models.clear()
 
         for target, model in schedule:
+            check_cancelled(cancel_event)
+
             if attempt >= max_attempts:
                 break
             if target.id in dropped_keys:
@@ -826,7 +600,7 @@ def analyze(
                     progress_callback,
                     f"Aguardando {wait_cd:.0f}s para liberar cota ({target.provider_name})...",
                 )
-                time.sleep(wait_cd)
+                sleep_with_cancel(wait_cd, cancel_event)
 
             attempt += 1
             _emit_retry(
@@ -838,12 +612,16 @@ def analyze(
                 data = _call_with_schema_fallback(
                     target, model, system_prompt, block
                 )
+                check_cancelled(cancel_event)
                 return _filter_by_score(
                     data.get("clips", []),
                     min_score=min_viral_score,
                     max_clips=max_clips,
                 )
+            except PipelineCancelledError:
+                raise
             except Exception as exc:
+                check_cancelled(cancel_event)
                 last_error = exc
 
                 # 1) Chave invalida (401/403) -> descarta a chave permanentemente
@@ -897,7 +675,7 @@ def analyze(
                         progress_callback,
                         f"Erro temporário em {target.provider_name} ({model}); tentando próximo em {wait:.0f}s...",
                     )
-                    time.sleep(min(wait, 5.0))
+                    sleep_with_cancel(min(wait, 5.0), cancel_event)
                     continue
 
                 # 6) Modelo inexistente/404/incompatível -> marca modelo como indisponivel
