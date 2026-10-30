@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from core.config import BASE_DIR, OUTPUT_DIR
 from core.options import ProcessingOptions
+from gui.controllers.pipeline_controller import PipelineController
 from gui.settings_dialog import SettingsDialog
 from gui.widgets import (
     Panel,
@@ -74,11 +75,16 @@ class MainWindow(QMainWindow):
         self.clip_paths: list[str] = []
         self.report_path: str | None = None
 
-        self.settings = QSettings("AutoCortesBR", "AutoCortesBR")
-        self.output_dir = self.settings.value("last_output_dir", str(OUTPUT_DIR))
-        self.options = ProcessingOptions.from_json(
-            self.settings.value("processing_options", "")
-        )
+        self.controller = PipelineController(self)
+        self.settings = self.controller.settings
+        self.output_dir = self.controller.load_output_dir()
+        self.options = self.controller.load_options()
+        self.controller.stage_changed.connect(self.on_stage)
+        self.controller.progress.connect(self._on_progress_updated)
+        self.controller.message.connect(self.on_log)
+        self.controller.finished.connect(self.on_finished)
+        self.controller.failed.connect(self.on_failed)
+        self.controller.cancelled.connect(self.on_cancelled)
 
         root = QWidget()
         root.setObjectName("Root")
@@ -355,11 +361,24 @@ class MainWindow(QMainWindow):
         action_row.addWidget(self.config_summary)
         panel.body.addLayout(action_row)
 
+        buttons_row = QHBoxLayout()
+        buttons_row.setSpacing(10)
+
         self.process_button = QPushButton("▶   Processar vídeo")
         self.process_button.setObjectName("ProcessButton")
         self.process_button.setCursor(Qt.PointingHandCursor)
         self.process_button.clicked.connect(self.process)
-        panel.body.addWidget(self.process_button)
+        buttons_row.addWidget(self.process_button, 1)
+
+        self.cancel_button = QPushButton("✕   Cancelar")
+        self.cancel_button.setObjectName("Ghost")
+        self.cancel_button.setCursor(Qt.PointingHandCursor)
+        self.cancel_button.setVisible(False)
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_processing)
+        buttons_row.addWidget(self.cancel_button)
+
+        panel.body.addLayout(buttons_row)
         return panel
 
     def _build_progress_panel(self) -> QWidget:
@@ -554,7 +573,7 @@ class MainWindow(QMainWindow):
         folder = text.strip()
         if folder:
             self.output_dir = folder
-            self.settings.setValue("last_output_dir", folder)
+            self.controller.save_output_dir(folder)
 
     def select_video(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -590,12 +609,11 @@ class MainWindow(QMainWindow):
         if folder:
             self.output_dir = folder
             self.output_label.setText(folder)
-            self.settings.setValue("last_output_dir", folder)
+            self.controller.save_output_dir(folder)
 
     def reset_output_dir(self):
-        self.output_dir = str(OUTPUT_DIR)
+        self.output_dir = self.controller.reset_output_dir()
         self.output_label.setText(self.output_dir)
-        self.settings.setValue("last_output_dir", self.output_dir)
 
     def on_captions_toggled(self, checked):
         self.options.captions_enabled = checked
@@ -615,7 +633,7 @@ class MainWindow(QMainWindow):
         self._save_options()
 
     def _save_options(self):
-        self.settings.setValue("processing_options", self.options.to_json())
+        self.controller.save_options(self.options)
 
     def _refresh_summary(self):
         o = self.options
@@ -657,6 +675,9 @@ class MainWindow(QMainWindow):
             else "Legendas desligadas"
         )
 
+    def _on_progress_updated(self, value: int):
+        self.progress_bar.setValue(value)
+
     def process(self):
         self.set_busy(True)
         self.progress_bar.setValue(0)
@@ -667,25 +688,28 @@ class MainWindow(QMainWindow):
 
         self.options.captions_enabled = self.captions_checkbox.isChecked()
         self.options.focus_instruction = self.focus_input.toPlainText().strip()
-        self._save_options()
 
-        self.worker = PipelineWorker(
+        self.worker = self.controller.start_pipeline(
             yt_link=self.video_link.text().strip(),
             video_path=self.video_path,
             output_dir=self.output_dir,
             options=self.options,
         )
-        self.worker.stage_changed.connect(self.on_stage)
-        self.worker.progress.connect(self.progress_bar.setValue)
-        self.worker.message.connect(self.on_log)
-        self.worker.finished.connect(self.on_finished)
-        self.worker.failed.connect(self.on_failed)
-        self.worker.start()
+
+    def cancel_processing(self):
+        if self.controller.cancel_pipeline():
+            self.cancel_button.setEnabled(False)
+            self.cancel_button.setText("Cancelando...")
+            self.stage_label.setText("Cancelando...")
+            self.log_view.appendPlainText("Solicitando cancelamento do pipeline...")
 
     def set_busy(self, busy):
         self.select_button.setEnabled(not busy)
         self.clear_file_button.setEnabled(not busy)
         self.process_button.setEnabled(not busy)
+        self.cancel_button.setVisible(busy)
+        self.cancel_button.setEnabled(busy)
+        self.cancel_button.setText("✕   Cancelar")
         self.output_button.setEnabled(not busy)
         self.reset_output_button.setEnabled(not busy)
         self.output_label.setEnabled(not busy)
@@ -746,6 +770,14 @@ class MainWindow(QMainWindow):
             step.set_state("done")
         self.stage_label.setText("Concluido")
         self._render_results(clips, self.clip_paths, self.report_path)
+
+    def on_cancelled(self, message: str):
+        self.set_busy(False)
+        self.stage_label.setText("Cancelado")
+        for step in self.pipe_steps:
+            if step.property("state") == "active":
+                step.set_state("idle")
+        self.log_view.appendPlainText(f"[CANCELADO] {message}")
 
     def on_failed(self, error):
         self.set_busy(False)
