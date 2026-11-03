@@ -55,6 +55,10 @@ class ProcessingOptions:
     # "full" = usa a transcricao geral (com palavras); "clip" = retranscreve
     # cada clipe (mais preciso, so faz sentido com GPU).
     caption_transcribe_mode: str = "clip"
+    # Estilo de animacao: "pop" (padrao dos presets) ou "rise" (subir e aparecer)
+    caption_animation: str = "pop"
+    # Efeito glow (brilho difuso em volta do texto)
+    caption_glow: bool = False
 
     # --- Cortes & IA ---
     max_clips: int = cfg.MAX_CLIPS
@@ -104,6 +108,14 @@ class ProcessingOptions:
             ),
         )
         self.focus_instruction = str(self.focus_instruction or "").strip()
+        self.caption_animation = (
+            str(self.caption_animation or "pop").strip().lower()
+        )
+        if self.caption_animation in ("rise", "rise_swing"):
+            self.caption_animation = "rise"
+        elif self.caption_animation != "pop":
+            self.caption_animation = "pop"
+        self.caption_glow = bool(self.caption_glow)
         return self
 
     @classmethod
