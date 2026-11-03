@@ -26,10 +26,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.captions import PRECONFIGURED_FONTS, list_available_fonts
+from core.captions import (
+    PRECONFIGURED_FONTS,
+    PRESETS,
+    VIRAL_PRESETS,
+    apply_preset,
+    detect_active_preset,
+    list_available_fonts,
+)
 from core.options import ProcessingOptions
 from gui.widgets import (
+    CollapsibleBox,
     PhonePreviewWidget,
+    PresetGrid,
     Switch,
     UnderlineTabs,
     eyebrow,
@@ -42,12 +51,6 @@ RESOLUTIONS = [
     ("720 × 1280 · HD", 720, 1280),
     ("1440 × 2560 · 2K", 1440, 2560),
 ]
-
-PRESETS = {
-    "TikTok · roxo": ("#7C3AED", "#FFFFFF"),
-    "Neon · ciano": ("#22D3EE", "#FFFFFF"),
-    "Amarelo": ("#FACC15", "#111111"),
-}
 
 
 class ColorButton(QWidget):
@@ -133,6 +136,7 @@ class SettingsDialog(QDialog):
         self.resize(820, 690)
         self.setMinimumSize(680, 560)
         self.options = options
+        self._syncing_preset = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -290,7 +294,36 @@ class SettingsDialog(QDialog):
         # --- coluna de campos
         left = QVBoxLayout()
         left.setSpacing(14)
-        left.addWidget(label("PRESET E TIPOGRAFIA", "SectionTitle"))
+
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(12)
+        self.captions_enabled_toggle = Switch("Gerar legendas dinamicas")
+        top_bar.addWidget(self.captions_enabled_toggle)
+        top_bar.addStretch(1)
+        self.preset_status_badge = label("Preset: TikTok Studio", "MiniPill")
+        top_bar.addWidget(self.preset_status_badge)
+        left.addLayout(top_bar)
+
+        left.addWidget(separator())
+        left.addWidget(label("PRESETS VIRAIS", "SectionTitle"))
+        left.addWidget(
+            label(
+                "Escolha um estilo pronto em 1 clique. Para ajustes finos, expanda as Configurações Avançadas abaixo.",
+                "Faint",
+                wrap=True,
+            )
+        )
+
+        self.preset_grid = PresetGrid(VIRAL_PRESETS, columns=2, parent=pane)
+        self.preset_grid.preset_selected.connect(self._on_preset_card_selected)
+        left.addWidget(self.preset_grid)
+
+        left.addWidget(separator())
+
+        # --- Menu retratil: Configuracoes Avancadas
+        self.advanced_box = CollapsibleBox(
+            "Configurações Avançadas", expanded=False, parent=pane
+        )
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
@@ -298,37 +331,26 @@ class SettingsDialog(QDialog):
 
         self.caption_preset = QComboBox()
         self.caption_preset.addItems(list(PRESETS.keys()))
-        apply_preset = QPushButton("Aplicar")
-        apply_preset.setObjectName("Ghost")
-        apply_preset.setCursor(Qt.PointingHandCursor)
-        apply_preset.clicked.connect(self._apply_preset)
-        preset_row = QHBoxLayout()
-        preset_row.setContentsMargins(0, 0, 0, 0)
-        preset_row.setSpacing(6)
-        preset_row.addWidget(self.caption_preset, 1)
-        preset_row.addWidget(apply_preset)
-        grid.addWidget(
-            _field_box("Preset de cores", self._wrap(preset_row)), 0, 0, 1, 2
-        )
+        self.caption_preset.setVisible(False)
 
         self.caption_font = QComboBox()
         self.caption_font.setEditable(False)
         self.caption_font.setMaxVisibleItems(16)
         self._populate_font_combo()
-        grid.addWidget(_field_box("Fonte", self.caption_font), 1, 0)
+        grid.addWidget(_field_box("Fonte", self.caption_font), 0, 0)
 
         self.caption_font_size = QSpinBox()
         self.caption_font_size.setRange(24, 180)
         grid.addWidget(
-            _field_box("Tamanho", self.caption_font_size, "24 – 180"), 1, 1
+            _field_box("Tamanho", self.caption_font_size, "24 – 180"), 0, 1
         )
 
         self.caption_text_color = ColorButton()
-        grid.addWidget(_field_box("Cor do texto", self.caption_text_color), 2, 0)
+        grid.addWidget(_field_box("Cor do texto", self.caption_text_color), 1, 0)
 
         self.caption_highlight_color = ColorButton()
         grid.addWidget(
-            _field_box("Cor do destaque", self.caption_highlight_color), 2, 1
+            _field_box("Cor do destaque", self.caption_highlight_color), 1, 1
         )
 
         self.caption_highlight_opacity = QDoubleSpinBox()
@@ -339,20 +361,20 @@ class SettingsDialog(QDialog):
             _field_box(
                 "Opacidade do bloco", self.caption_highlight_opacity, "0 – 1"
             ),
-            3,
+            2,
             0,
         )
 
         self.caption_box_padding = QSpinBox()
         self.caption_box_padding.setRange(0, 60)
         grid.addWidget(
-            _field_box("Padding do bloco", self.caption_box_padding), 3, 1
+            _field_box("Padding do bloco", self.caption_box_padding), 2, 1
         )
 
         self.caption_corner_radius = QSpinBox()
         self.caption_corner_radius.setRange(0, 80)
         grid.addWidget(
-            _field_box("Cantos arredondados", self.caption_corner_radius), 4, 0
+            _field_box("Cantos arredondados", self.caption_corner_radius), 3, 0
         )
 
         self.caption_word_spacing = QDoubleSpinBox()
@@ -363,58 +385,64 @@ class SettingsDialog(QDialog):
             _field_box(
                 "Espaco entre palavras", self.caption_word_spacing, "0.5 – 1.5"
             ),
-            4,
+            3,
             1,
         )
 
         self.caption_outline_color = ColorButton()
         grid.addWidget(
-            _field_box("Cor do contorno", self.caption_outline_color), 5, 0
+            _field_box("Cor do contorno", self.caption_outline_color), 4, 0
         )
 
         self.caption_outline_width = QSpinBox()
         self.caption_outline_width.setRange(0, 20)
         grid.addWidget(
-            _field_box("Contorno", self.caption_outline_width, "0 – 20"), 5, 1
+            _field_box("Contorno", self.caption_outline_width, "0 – 20"), 4, 1
         )
 
         self.caption_max_words_per_line = QSpinBox()
         self.caption_max_words_per_line.setRange(1, 8)
         grid.addWidget(
-            _field_box("Palavras por linha", self.caption_max_words_per_line), 6, 0
+            _field_box("Palavras por linha", self.caption_max_words_per_line), 5, 0
         )
 
         self.caption_max_lines = QSpinBox()
         self.caption_max_lines.setRange(1, 3)
-        grid.addWidget(_field_box("Linhas", self.caption_max_lines), 6, 1)
+        grid.addWidget(_field_box("Linhas", self.caption_max_lines), 5, 1)
 
         self.caption_margin_bottom = QSpinBox()
         self.caption_margin_bottom.setRange(0, 1200)
         self.caption_margin_bottom.setSingleStep(10)
         grid.addWidget(
-            _field_box("Margem do rodape", self.caption_margin_bottom, "px"), 7, 0
+            _field_box("Margem do rodape", self.caption_margin_bottom, "px"), 6, 0
         )
 
         self.caption_transcribe_mode = QComboBox()
         self.caption_transcribe_mode.addItem("Por clipe · mais preciso", "clip")
         self.caption_transcribe_mode.addItem("Completa · mais rapido", "full")
         grid.addWidget(
-            _field_box("Transcricao", self.caption_transcribe_mode), 7, 1
+            _field_box("Transcricao", self.caption_transcribe_mode), 6, 1
         )
 
-        left.addLayout(grid)
-        left.addWidget(separator())
+        self.caption_animation = QComboBox()
+        self.caption_animation.addItem("Pop / Padrão", "pop")
+        self.caption_animation.addItem("Subir e Aparecer (Rise)", "rise")
+        grid.addWidget(
+            _field_box("Animação", self.caption_animation), 7, 0
+        )
+
+        self.advanced_box.set_content_layout(grid)
 
         toggles = QHBoxLayout()
         toggles.setSpacing(22)
-        self.captions_enabled_toggle = Switch("Gerar legendas dinamicas")
         self.caption_uppercase = Switch("Texto em maiusculas")
-        toggles.addWidget(self.captions_enabled_toggle)
         toggles.addWidget(self.caption_uppercase)
+        self.caption_glow = Switch("Efeito Glow (brilho)")
+        toggles.addWidget(self.caption_glow)
         toggles.addStretch(1)
-        left.addLayout(toggles)
+        self.advanced_box.set_content_layout(toggles)
 
-        left.addWidget(
+        self.advanced_box.add_widget(
             label(
                 "Margens altas colocam a legenda na faixa desfocada do rodape. "
                 "O modo “por clipe” retranscreve cada corte e exige mais processamento.",
@@ -422,6 +450,8 @@ class SettingsDialog(QDialog):
                 wrap=True,
             )
         )
+
+        left.addWidget(self.advanced_box)
         left.addStretch(1)
         outer.addLayout(left, 1)
 
@@ -620,6 +650,7 @@ class SettingsDialog(QDialog):
             self.encoder,
             self.caption_font,
             self.caption_transcribe_mode,
+            self.caption_animation,
         ):
             combo.currentIndexChanged.connect(self._refresh_preview)
             if combo.isEditable():
@@ -632,6 +663,7 @@ class SettingsDialog(QDialog):
             color_btn.changed.connect(self._refresh_preview)
         self.captions_enabled_toggle.toggled.connect(self._refresh_preview)
         self.caption_uppercase.toggled.connect(self._refresh_preview)
+        self.caption_glow.toggled.connect(self._refresh_preview)
 
     def _draft_options(self) -> ProcessingOptions:
         draft = ProcessingOptions.from_dict(self.options.to_dict())
@@ -639,26 +671,41 @@ class SettingsDialog(QDialog):
         return draft
 
     def _refresh_preview(self, *_args):
+        if self._syncing_preset:
+            return
+        draft = self._draft_options()
         if hasattr(self, "preview_widget"):
-            self.preview_widget.set_options(self._draft_options())
+            self.preview_widget.set_options(draft)
+        self._update_preset_status(draft)
+
+    def _update_preset_status(self, options: ProcessingOptions):
+        active_id = detect_active_preset(options)
+        if hasattr(self, "preset_grid"):
+            self.preset_grid.select_preset(active_id)
+        if hasattr(self, "preset_status_badge"):
+            if active_id and active_id in VIRAL_PRESETS:
+                self.preset_status_badge.setText(
+                    f"Preset: {VIRAL_PRESETS[active_id].name}"
+                )
+            else:
+                self.preset_status_badge.setText("Personalizado (Custom)")
+
+    def _on_preset_card_selected(self, preset_id: str):
+        draft = self._draft_options()
+        apply_preset(draft, preset_id)
+        draft.captions_enabled = True
+        self._syncing_preset = True
+        try:
+            self._load_caption_fields(draft)
+        finally:
+            self._syncing_preset = False
+        self._refresh_preview()
 
     def _restore_defaults(self):
         self._load(ProcessingOptions())
         self._refresh_preview()
 
-    def _load(self, options: ProcessingOptions):
-        self.zoom.setValue(options.zoom)
-        self.blur.setValue(options.blur_sigma)
-        self.bg_brightness.setValue(options.bg_brightness)
-        self.crf.setValue(options.crf)
-        self.preset.setCurrentText(options.preset)
-        self.encoder.setCurrentText(options.encoder or "auto")
-        for index in range(self.resolution.count()):
-            width, height = self.resolution.itemData(index)
-            if (width, height) == (options.width, options.height):
-                self.resolution.setCurrentIndex(index)
-                break
-
+    def _load_caption_fields(self, options: ProcessingOptions):
         self.captions_enabled_toggle.setChecked(options.captions_enabled)
         font_name = (options.caption_font or "Arial").strip()
         font_idx = self.caption_font.findText(font_name, Qt.MatchFixedString)
@@ -679,6 +726,7 @@ class SettingsDialog(QDialog):
         self.caption_max_lines.setValue(options.caption_max_lines)
         self.caption_margin_bottom.setValue(options.caption_margin_bottom)
         self.caption_uppercase.setChecked(options.caption_uppercase)
+        self.caption_glow.setChecked(bool(getattr(options, "caption_glow", False)))
 
         mode = options.caption_transcribe_mode or "clip"
         for idx in range(self.caption_transcribe_mode.count()):
@@ -686,35 +734,58 @@ class SettingsDialog(QDialog):
                 self.caption_transcribe_mode.setCurrentIndex(idx)
                 break
 
-        self.max_clips.setValue(options.max_clips)
-        self.min_viral_score.setValue(options.min_viral_score)
-        self.min_clip_duration.setValue(options.min_clip_duration)
-        self.max_clip_duration.setValue(
-            max(options.min_clip_duration, options.max_clip_duration)
-        )
-        self.pause_gap.setValue(options.pause_gap)
-        self.padding_s.setValue(options.padding_s)
-        self.max_workers.setValue(options.max_workers)
-
-        w_model = (options.whisper_model or "large").strip()
-        w_found = False
-        for idx in range(self.whisper_model.count()):
-            if self.whisper_model.itemData(idx) == w_model:
-                self.whisper_model.setCurrentIndex(idx)
-                w_found = True
+        anim = options.caption_animation or "pop"
+        if anim == "rise_swing":
+            anim = "rise"
+        for idx in range(self.caption_animation.count()):
+            if self.caption_animation.itemData(idx) == anim:
+                self.caption_animation.setCurrentIndex(idx)
                 break
-        if not w_found:
-            self.whisper_model.insertItem(0, w_model, w_model)
-            self.whisper_model.setCurrentIndex(0)
+
+    def _load(self, options: ProcessingOptions):
+        self._syncing_preset = True
+        try:
+            self.zoom.setValue(options.zoom)
+            self.blur.setValue(options.blur_sigma)
+            self.bg_brightness.setValue(options.bg_brightness)
+            self.crf.setValue(options.crf)
+            self.preset.setCurrentText(options.preset)
+            self.encoder.setCurrentText(options.encoder or "auto")
+            for index in range(self.resolution.count()):
+                width, height = self.resolution.itemData(index)
+                if (width, height) == (options.width, options.height):
+                    self.resolution.setCurrentIndex(index)
+                    break
+
+            self._load_caption_fields(options)
+
+            self.max_clips.setValue(options.max_clips)
+            self.min_viral_score.setValue(options.min_viral_score)
+            self.min_clip_duration.setValue(options.min_clip_duration)
+            self.max_clip_duration.setValue(
+                max(options.min_clip_duration, options.max_clip_duration)
+            )
+            self.pause_gap.setValue(options.pause_gap)
+            self.padding_s.setValue(options.padding_s)
+            self.max_workers.setValue(options.max_workers)
+
+            w_model = (options.whisper_model or "large").strip()
+            w_found = False
+            for idx in range(self.whisper_model.count()):
+                if self.whisper_model.itemData(idx) == w_model:
+                    self.whisper_model.setCurrentIndex(idx)
+                    w_found = True
+                    break
+            if not w_found:
+                self.whisper_model.insertItem(0, w_model, w_model)
+                self.whisper_model.setCurrentIndex(0)
+        finally:
+            self._syncing_preset = False
+        self._update_preset_status(options)
 
     def _apply_preset(self):
         name = self.caption_preset.currentText()
-        if name not in PRESETS:
-            return
-        highlight, text = PRESETS[name]
-        self.caption_highlight_color.set_color(highlight)
-        self.caption_text_color.set_color(text)
-        self._refresh_preview()
+        self._on_preset_card_selected(name)
 
     def _write_into(self, options: ProcessingOptions):
         options.zoom = self.zoom.value()
@@ -748,9 +819,15 @@ class SettingsDialog(QDialog):
         options.caption_max_lines = self.caption_max_lines.value()
         options.caption_margin_bottom = self.caption_margin_bottom.value()
         options.caption_uppercase = self.caption_uppercase.isChecked()
+        options.caption_glow = self.caption_glow.isChecked()
         options.caption_transcribe_mode = (
             self.caption_transcribe_mode.currentData()
             or self.caption_transcribe_mode.currentText()
+        )
+        options.caption_animation = (
+            self.caption_animation.currentData()
+            or self.caption_animation.currentText()
+            or "pop"
         )
         options.max_clips = self.max_clips.value()
         options.min_viral_score = self.min_viral_score.value()

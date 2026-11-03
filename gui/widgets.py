@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -434,10 +435,13 @@ class PhonePreviewWidget(QWidget):
         text_color = QColor(opts.caption_text_color or "#FFFFFF")
         text_color.setAlphaF(alpha)
 
+        box_opacity = max(0.0, min(1.0, float(opts.caption_highlight_opacity)))
+        has_box = box_opacity > 0.01
         hl_color = QColor(opts.caption_highlight_color or "#7C3AED")
-        hl_color.setAlphaF(
-            max(0.0, min(1.0, float(opts.caption_highlight_opacity))) * alpha
-        )
+        hl_color.setAlphaF(box_opacity * alpha)
+
+        active_word_color = QColor(opts.caption_highlight_color or "#FACC15")
+        active_word_color.setAlphaF(alpha)
 
         outline_color = QColor(opts.caption_outline_color or "#000000")
         outline_color.setAlphaF(alpha * 0.9)
@@ -460,18 +464,224 @@ class PhonePreviewWidget(QWidget):
 
             for (word_idx, word), w_box in zip(line, widths):
                 rect = QRectF(cur_x, cur_y, w_box, fm.height() + pad_y * 2)
-                if word_idx == hi_index:
+                if word_idx == hi_index and has_box:
                     painter.setPen(Qt.NoPen)
                     painter.setBrush(hl_color)
                     painter.drawRoundedRect(rect, box_radius, box_radius)
 
-                if opts.caption_outline_width > 0:
-                    painter.setPen(outline_color)
-                    for dx, dy in ((-0.8, 0), (0.8, 0), (0, -0.8), (0, 0.8)):
+                if getattr(opts, "caption_glow", False):
+                    # Halo suave de baixa opacidade ao redor da palavra
+                    glow_pen = QColor("#FFFFFF")
+                    glow_pen.setAlpha(int(36 * alpha))
+                    painter.setPen(glow_pen)
+                    for dx, dy in (
+                        (-2.0, 0),
+                        (2.0, 0),
+                        (0, -2.0),
+                        (0, 2.0),
+                        (-1.5, -1.5),
+                        (1.5, -1.5),
+                        (-1.5, 1.5),
+                        (1.5, 1.5),
+                    ):
                         painter.drawText(
                             rect.translated(dx, dy), Qt.AlignCenter, word
                         )
 
-                painter.setPen(text_color)
+                if opts.caption_outline_width > 0:
+                    painter.setPen(outline_color)
+                    d = max(0.6, min(2.5, opts.caption_outline_width * scale * 0.45))
+                    for dx, dy in (
+                        (-d, 0),
+                        (d, 0),
+                        (0, -d),
+                        (0, d),
+                    ):
+                        painter.drawText(
+                            rect.translated(dx, dy), Qt.AlignCenter, word
+                        )
+
+                if word_idx == hi_index and not has_box:
+                    painter.setPen(active_word_color)
+                else:
+                    painter.setPen(text_color)
                 painter.drawText(rect, Qt.AlignCenter, word)
                 cur_x += w_box + word_gap
+
+
+class PresetCard(QFrame):
+    """Card visual clicavel para representar um Preset Viral de legenda."""
+
+    clicked = Signal(str)
+
+    def __init__(self, preset, parent=None):
+        super().__init__(parent)
+        self.preset = preset
+        self.preset_id = preset.id
+        self._selected = False
+        self.setObjectName("PresetCard")
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
+
+        top = QHBoxLayout()
+        top.setContentsMargins(0, 0, 0, 0)
+        top.setSpacing(6)
+        title_lbl = label(preset.name, "FieldLabel")
+        tag_lbl = label(preset.tag, "MiniPill")
+        top.addWidget(title_lbl, 1)
+        top.addWidget(tag_lbl, 0, Qt.AlignRight)
+        layout.addLayout(top)
+
+        # Mini-amostra estilizada do preset
+        sample = QLabel(preset.sample_text)
+        sample.setAlignment(Qt.AlignCenter)
+        sample.setFixedHeight(32)
+        s_cfg = preset.settings
+        fg = s_cfg.get("caption_text_color", "#FFFFFF")
+        hl = s_cfg.get("caption_highlight_color", "#7C3AED")
+        opacity = float(s_cfg.get("caption_highlight_opacity", 0.0))
+        font_family = s_cfg.get("caption_font", "Arial")
+
+        if s_cfg.get("caption_glow"):
+            sample.setStyleSheet(
+                f"background-color: #0b0d13; color: #FFFFFF; "
+                f"font-family: '{font_family}'; font-weight: 900; font-size: 13px; "
+                "border: 1px solid rgba(255, 255, 255, 0.45); border-radius: 7px; padding: 3px 8px;"
+            )
+        elif opacity > 0.05:
+            sample.setStyleSheet(
+                f"background-color: {hl}; color: {fg}; "
+                f"font-family: '{font_family}'; font-weight: 800; font-size: 13px; "
+                "border-radius: 7px; padding: 3px 8px;"
+            )
+        else:
+            sample.setStyleSheet(
+                f"background-color: #16181d; color: {hl}; "
+                f"font-family: '{font_family}'; font-weight: 800; font-size: 13px; "
+                "border: 1px solid rgba(255,255,255,0.08); border-radius: 7px; padding: 3px 8px;"
+            )
+        layout.addWidget(sample)
+
+        desc = label(preset.description, "Faint", wrap=True)
+        layout.addWidget(desc)
+        self._apply_card_style()
+
+    def set_selected(self, selected: bool):
+        if self._selected != bool(selected):
+            self._selected = bool(selected)
+            self._apply_card_style()
+
+    def is_selected(self) -> bool:
+        return self._selected
+
+    def _apply_card_style(self):
+        if self._selected:
+            self.setStyleSheet(
+                "QFrame#PresetCard { "
+                f"background-color: rgba(201, 255, 79, 0.07); "
+                f"border: 1.5px solid {theme.LIME}; "
+                "border-radius: 10px; }"
+            )
+        else:
+            self.setStyleSheet(
+                "QFrame#PresetCard { "
+                "background-color: rgba(255, 255, 255, 0.025); "
+                "border: 1px solid rgba(255, 255, 255, 0.09); "
+                "border-radius: 10px; } "
+                "QFrame#PresetCard:hover { "
+                "border: 1px solid rgba(255, 255, 255, 0.24); }"
+            )
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.preset_id)
+        super().mousePressEvent(event)
+
+
+class PresetGrid(QWidget):
+    """Galeria em grade de PresetCards com selecao exclusiva."""
+
+    preset_selected = Signal(str)
+
+    def __init__(self, presets: dict, columns: int = 2, parent=None):
+        super().__init__(parent)
+        self.cards: dict[str, PresetCard] = {}
+        self._selected_id: str | None = None
+
+        layout = QGridLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(10)
+
+        for idx, (preset_id, preset) in enumerate(presets.items()):
+            card = PresetCard(preset, self)
+            card.clicked.connect(self._on_card_clicked)
+            self.cards[preset_id] = card
+            layout.addWidget(card, idx // columns, idx % columns)
+
+    def _on_card_clicked(self, preset_id: str):
+        self.select_preset(preset_id)
+        self.preset_selected.emit(preset_id)
+
+    def select_preset(self, preset_id: str | None):
+        self._selected_id = preset_id
+        for cid, card in self.cards.items():
+            card.set_selected(cid == preset_id)
+
+    def selected_preset(self) -> str | None:
+        return self._selected_id
+
+
+class CollapsibleBox(QWidget):
+    """Container tipo sanfona (Accordion) para agrupar Configuracoes Avancadas."""
+
+    toggled = Signal(bool)
+
+    def __init__(self, title: str = "Configurações Avançadas", expanded: bool = False, parent=None):
+        super().__init__(parent)
+        self._title = title
+        self._expanded = bool(expanded)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(10)
+
+        self.toggle_button = QPushButton()
+        self.toggle_button.setObjectName("Ghost")
+        self.toggle_button.setCursor(Qt.PointingHandCursor)
+        self.toggle_button.clicked.connect(self.toggle)
+        root.addWidget(self.toggle_button)
+
+        self.content_area = QWidget()
+        self.content_layout = QVBoxLayout(self.content_area)
+        self.content_layout.setContentsMargins(0, 4, 0, 0)
+        self.content_layout.setSpacing(12)
+        root.addWidget(self.content_area)
+
+        self._sync_ui()
+
+    def set_content_layout(self, layout):
+        # Move widgets/layouts into content_layout
+        self.content_layout.addLayout(layout)
+
+    def add_widget(self, widget: QWidget):
+        self.content_layout.addWidget(widget)
+
+    def toggle(self):
+        self.set_expanded(not self._expanded)
+
+    def set_expanded(self, expanded: bool):
+        self._expanded = bool(expanded)
+        self._sync_ui()
+        self.toggled.emit(self._expanded)
+
+    def is_expanded(self) -> bool:
+        return self._expanded
+
+    def _sync_ui(self):
+        arrow = "▾" if self._expanded else "▸"
+        self.toggle_button.setText(f"{arrow}   {self._title}")
+        self.content_area.setVisible(self._expanded)
