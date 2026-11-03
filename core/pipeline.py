@@ -8,7 +8,7 @@ from core.config import BASE_DIR, OUTPUT_DIR
 from core.exceptions import PipelineCancelledError, check_cancelled
 from core.options import ProcessingOptions
 from utils.normalize import normalize_clips
-from utils.report import save_report
+from utils.report import register_project, save_report
 
 
 def _emit(progress_callback, stage, percent, message):
@@ -159,6 +159,15 @@ def run(
         check_cancelled(cancel_event)
         _emit(progress_callback, "relatorio", 95, "Gerando relatorio...")
         report_path = save_report(clips, out_dir, clip_paths)
+        project_entry = register_project(
+            video_name=video_stem,
+            project_dir=out_dir,
+            report_path=report_path,
+            clips=clips,
+            clip_paths=clip_paths,
+            video_path=video_path,
+            yt_link=yt_link,
+        )
 
         _emit(progress_callback, "concluido", 100, "Concluido")
 
@@ -166,6 +175,7 @@ def run(
             "clips": clips,
             "clip_paths": clip_paths,
             "report_path": report_path,
+            "project": project_entry,
         }
     finally:
         _cleanup_temp_residuals()

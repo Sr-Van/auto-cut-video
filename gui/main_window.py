@@ -21,9 +21,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.captions.presets import VIRAL_PRESETS, detect_active_preset
 from core.config import BASE_DIR, OUTPUT_DIR
 from core.options import ProcessingOptions
 from gui.controllers.pipeline_controller import PipelineController
+from gui.projects_dialog import ProjectsDialog, update_published_button_ui
 from gui.settings_dialog import SettingsDialog
 from gui.widgets import (
     Panel,
@@ -36,6 +38,7 @@ from gui.widgets import (
     separator,
 )
 from gui.workers import PipelineWorker
+from utils.report import load_report, update_clip_published
 
 LOG_MAX_LINES = 500
 
@@ -130,8 +133,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(label("BR", "BrandTag"))
         layout.addStretch(1)
 
-        pill = label("●  Pipeline local pronto", "ServerPill")
-        layout.addWidget(pill)
+        self.projects_button = QPushButton("▣  Projetos")
+        self.projects_button.setObjectName("Ghost")
+        self.projects_button.setCursor(Qt.PointingHandCursor)
+        self.projects_button.clicked.connect(self.open_projects)
+        layout.addWidget(self.projects_button)
 
         self.settings_button = QPushButton("⚙  Configurações")
         self.settings_button.setObjectName("Ghost")
@@ -628,6 +634,26 @@ class MainWindow(QMainWindow):
             self._save_options()
             self._refresh_summary()
 
+    def open_projects(self):
+        dialog = ProjectsDialog(self)
+        dialog.project_deleted.connect(self._on_project_deleted_in_dialog)
+        dialog.clip_published_changed.connect(self._on_clip_published_changed_in_dialog)
+        dialog.exec()
+
+    def _on_project_deleted_in_dialog(self, project_dir: str):
+        cur_folder = self._result_folder()
+        if cur_folder and str(Path(cur_folder).resolve()).lower() == str(Path(project_dir).resolve()).lower():
+            self._clear_results_grid()
+            self.results_section.setVisible(False)
+            self.clip_paths = []
+            self.report_path = None
+
+    def _on_clip_published_changed_in_dialog(self, report_path: str, _clip_idx: int, _published: bool):
+        if self.report_path and Path(self.report_path).exists():
+            if str(Path(self.report_path).resolve()).lower() == str(Path(report_path).resolve()).lower():
+                updated_clips = load_report(self.report_path)
+                self._render_results(updated_clips, self.clip_paths, self.report_path)
+
     def _on_focus_edited(self):
         self.options.focus_instruction = self.focus_input.toPlainText().strip()
         self._save_options()
@@ -637,18 +663,28 @@ class MainWindow(QMainWindow):
 
     def _refresh_summary(self):
         o = self.options
+        active_preset_id = detect_active_preset(o)
+        preset_name = (
+            VIRAL_PRESETS[active_preset_id].name
+            if active_preset_id in VIRAL_PRESETS
+            else None
+        )
+        caption_summary = (
+            (
+                f"{preset_name} · {o.caption_font} {o.caption_font_size}"
+                if preset_name
+                else f"{o.caption_font} {o.caption_font_size} · {o.caption_max_words_per_line} palavras"
+            )
+            if o.captions_enabled
+            else "desligada"
+        )
         values = {
             "resolution": f"{o.width} × {o.height}",
             "zoom": f"{o.zoom:.2f}×",
             "blur": f"{o.blur_sigma:.1f}",
             "crf": f"{o.crf} · {o.preset}",
             "encoder": o.encoder or "auto",
-            "caption": (
-                f"{o.caption_font} {o.caption_font_size} · "
-                f"{o.caption_max_words_per_line} palavras"
-                if o.captions_enabled
-                else "desligada"
-            ),
+            "caption": caption_summary,
             "transcribe": TRANSCRIBE_LABELS.get(
                 o.caption_transcribe_mode, o.caption_transcribe_mode
             ),
@@ -713,6 +749,7 @@ class MainWindow(QMainWindow):
         self.output_button.setEnabled(not busy)
         self.reset_output_button.setEnabled(not busy)
         self.output_label.setEnabled(not busy)
+        self.projects_button.setEnabled(not busy)
         self.settings_button.setEnabled(not busy)
         self.summary_edit_button.setEnabled(not busy)
         self.captions_checkbox.setEnabled(not busy)
@@ -816,10 +853,10 @@ class MainWindow(QMainWindow):
 
         for idx, clip in enumerate(clips):
             path = paths[idx] if idx < len(paths) else ""
-            card = self._build_result_card(clip, path)
+            card = self._build_result_card(clip, path, clip_index=idx)
             self.results_grid.addWidget(card, idx // 2, idx % 2)
 
-    def _build_result_card(self, clip: dict, path: str) -> QWidget:
+    def _build_result_card(self, clip: dict, path: str, clip_index: int = 0) -> QWidget:
         card = QFrame()
         card.setObjectName("ResultCard")
         row = QHBoxLayout(card)
@@ -870,9 +907,9 @@ class MainWindow(QMainWindow):
 
         body.addStretch(1)
 
+        actions = QHBoxLayout()
+        actions.setSpacing(6)
         if path:
-            actions = QHBoxLayout()
-            actions.setSpacing(6)
             open_btn = QPushButton("Abrir MP4")
             open_btn.setObjectName("Ghost")
             open_btn.setCursor(Qt.PointingHandCursor)
@@ -891,14 +928,34 @@ class MainWindow(QMainWindow):
             )
             actions.addWidget(copy_btn)
 
-            actions.addStretch(1)
+        pub_btn = QPushButton()
+        pub_btn.setObjectName("PublishedBtn")
+        pub_btn.setCheckable(True)
+        pub_btn.setCursor(Qt.PointingHandCursor)
+        update_published_button_ui(pub_btn, bool(clip.get("published", False)))
+        pub_btn.clicked.connect(
+            lambda checked, idx=clip_index, b=pub_btn: self._toggle_result_clip_published(
+                idx, checked, b
+            )
+        )
+        actions.addWidget(pub_btn)
+
+        actions.addStretch(1)
+        if path:
             fname = label(Path(path).name, "ClipPath")
             fname.setToolTip(str(path))
             actions.addWidget(fname)
-            body.addLayout(actions)
+        body.addLayout(actions)
 
         row.addLayout(body, 1)
         return card
+
+    def _toggle_result_clip_published(
+        self, clip_index: int, published: bool, button: QPushButton
+    ) -> None:
+        if self.report_path and Path(self.report_path).exists():
+            update_clip_published(self.report_path, clip_index, published)
+        update_published_button_ui(button, published)
 
     def _result_folder(self):
         for path in self.clip_paths:

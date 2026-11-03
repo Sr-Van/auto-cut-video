@@ -521,6 +521,75 @@ QPlainTextEdit#Log {{
     padding: 28px 18px;
 }}
 
+/* ---------- projetos e publicacao ---------- */
+QPushButton#PublishedBtn {{
+    background: rgba(255, 255, 255, 0.025);
+    border: 1px solid {LINE_STRONG};
+    border-radius: 14px;
+    padding: 5px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: {MUTED};
+}}
+QPushButton#PublishedBtn:hover {{
+    background: rgba(34, 197, 94, 0.10);
+    border-color: rgba(34, 197, 94, 0.45);
+    color: #86efac;
+}}
+QPushButton#PublishedBtn[published="true"],
+QPushButton#PublishedBtn:checked {{
+    background: rgba(34, 197, 94, 0.16);
+    border: 1px solid #22c55e;
+    color: #4ade80;
+    font-weight: 700;
+}}
+QPushButton#PublishedBtn[published="true"]:hover,
+QPushButton#PublishedBtn:checked:hover {{
+    background: rgba(34, 197, 94, 0.26);
+    border-color: #4ade80;
+    color: #86efac;
+}}
+QPushButton#Danger {{
+    background: rgba(239, 68, 68, 0.08);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 17px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #f87171;
+}}
+QPushButton#Danger:hover {{
+    background: rgba(239, 68, 68, 0.18);
+    border-color: #ef4444;
+    color: #fca5a5;
+}}
+#ProjectAccordion {{
+    background: {PANEL};
+    border: 1px solid {LINE};
+    border-radius: 14px;
+}}
+#ProjectAccordion[expanded="true"] {{
+    border: 1px solid rgba(201, 255, 79, 0.24);
+}}
+QPushButton#ProjectHeaderBtn {{
+    background: transparent;
+    border: none;
+    border-radius: 14px;
+    padding: 14px 18px;
+    text-align: left;
+    font-size: 14px;
+    font-weight: 600;
+}}
+QPushButton#ProjectHeaderBtn:hover {{
+    background: rgba(255, 255, 255, 0.025);
+}}
+#ProjectClipCard {{
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid {LINE};
+    border-radius: 12px;
+}}
+
+
 /* ---------- configuracoes ---------- */
 #SettingsHead {{
     background: {BG};
