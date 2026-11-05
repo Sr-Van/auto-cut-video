@@ -1,7 +1,7 @@
-"""Dialog de configuracoes (video vertical + legendas), persistido via QSettings.
+"""Painel e diálogo de configurações (vídeo vertical, legendas e IA), persistido via QSettings.
 
-Espelha o modal de configuracoes de `site/index.html` e mantem a API publica
-(`ColorButton`, `SettingsDialog`, `RESOLUTIONS`, `PRESETS`).
+Suporta execução embarcada na navegação principal (`embedded=True`) e uso
+como diálogo autônomo (`SettingsDialog(options)`).
 """
 
 import re
@@ -35,26 +35,26 @@ from core.captions import (
     list_available_fonts,
 )
 from core.options import ProcessingOptions
+from gui import theme
 from gui.widgets import (
     CollapsibleBox,
     PhonePreviewWidget,
     PresetGrid,
     Switch,
     UnderlineTabs,
-    eyebrow,
     label,
     separator,
 )
 
 RESOLUTIONS = [
-    ("1080 × 1920 · Full HD", 1080, 1920),
-    ("720 × 1280 · HD", 720, 1280),
-    ("1440 × 2560 · 2K", 1440, 2560),
+    ("1080 × 1920 · Full HD (9:16)", 1080, 1920),
+    ("720 × 1280 · HD (9:16)", 720, 1280),
+    ("1440 × 2560 · 2K (9:16)", 1440, 2560),
 ]
 
 
 class ColorButton(QWidget):
-    """Controle de cor `.color-control`: swatch clicavel + campo hex."""
+    """Seletor de cor enxuto: amostra clicável + campo hexadecimal."""
 
     changed = Signal(str)
 
@@ -67,7 +67,7 @@ class ColorButton(QWidget):
         layout.setSpacing(6)
 
         self.swatch = QPushButton()
-        self.swatch.setFixedSize(36, 36)
+        self.swatch.setFixedSize(32, 32)
         self.swatch.setCursor(Qt.PointingHandCursor)
         self.swatch.clicked.connect(self._choose)
 
@@ -83,13 +83,15 @@ class ColorButton(QWidget):
     def _refresh(self):
         self.swatch.setStyleSheet(
             f"background-color: {self._color}; "
-            "border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;"
+            f"border: 1px solid {theme.LINE_STRONG}; border-radius: 5px;"
         )
         if self.hex_edit.text().upper() != self._color:
             self.hex_edit.setText(self._color)
 
     def _choose(self):
-        chosen = QColorDialog.getColor(QColor(self._color), self, "Escolher cor")
+        chosen = QColorDialog.getColor(
+            QColor(self._color), self, "Escolher cor"
+        )
         if chosen.isValid():
             self.set_color(chosen.name())
             self.changed.emit(self._color)
@@ -100,7 +102,7 @@ class ColorButton(QWidget):
             self._color = value
             self.swatch.setStyleSheet(
                 f"background-color: {self._color}; "
-                "border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;"
+                f"border: 1px solid {theme.LINE_STRONG}; border-radius: 5px;"
             )
             self.changed.emit(self._color)
 
@@ -116,7 +118,7 @@ def _field_box(title: str, control: QWidget, hint: str = "") -> QWidget:
     holder = QWidget()
     layout = QVBoxLayout(holder)
     layout.setContentsMargins(0, 0, 0, 0)
-    layout.setSpacing(6)
+    layout.setSpacing(5)
 
     head = QHBoxLayout()
     head.setContentsMargins(0, 0, 0, 0)
@@ -130,11 +132,25 @@ def _field_box(title: str, control: QWidget, hint: str = "") -> QWidget:
 
 
 class SettingsDialog(QDialog):
-    def __init__(self, options: ProcessingOptions, parent=None):
+    """Configurações completas de Vídeo, Legenda e Cortes/IA."""
+
+    options_changed = Signal(object)
+
+    def __init__(
+        self,
+        options: ProcessingOptions,
+        parent=None,
+        embedded: bool = False,
+    ):
         super().__init__(parent)
-        self.setWindowTitle("Configuracoes")
-        self.resize(820, 690)
-        self.setMinimumSize(680, 560)
+        self.embedded = bool(embedded)
+        if self.embedded:
+            self.setWindowFlags(Qt.Widget)
+        else:
+            self.setWindowTitle("Ajustes")
+            self.resize(840, 680)
+            self.setMinimumSize(680, 540)
+
         self.options = options
         self._syncing_preset = False
 
@@ -142,27 +158,28 @@ class SettingsDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- cabecalho (.settings-head)
-        head = QFrame()
-        head.setObjectName("SettingsHead")
-        head_layout = QVBoxLayout(head)
-        head_layout.setContentsMargins(26, 22, 26, 18)
-        head_layout.setSpacing(6)
-        head_layout.addWidget(eyebrow("Configuracoes"))
-        head_layout.addWidget(label("Ajustes do processamento", "PanelTitle"))
-        sub = QLabel(
-            'Os mesmos parametros do <span style="color:#c9ff4f; font-family:Consolas;">ProcessingOptions</span> usados pelo pipeline.'
-        )
-        sub.setObjectName("Faint")
-        sub.setTextFormat(Qt.RichText)
-        head_layout.addWidget(sub)
-        root.addWidget(head)
+        # --- Cabeçalho (apenas quando aberto como diálogo isolado)
+        if not self.embedded:
+            head = QFrame()
+            head.setObjectName("SettingsHead")
+            head_layout = QVBoxLayout(head)
+            head_layout.setContentsMargins(20, 16, 20, 14)
+            head_layout.setSpacing(4)
+            head_layout.addWidget(
+                label("Ajustes do processamento", "PanelTitle")
+            )
+            sub = QLabel(
+                "Parâmetros de vídeo vertical, estilo de legendas e critérios de corte por IA."
+            )
+            sub.setObjectName("Faint")
+            head_layout.addWidget(sub)
+            root.addWidget(head)
 
-        # --- abas sublinhadas (.settings-tabs)
-        self.tabs = UnderlineTabs(["Video", "Legenda", "Cortes & IA"])
+        # --- Sub-abas (Vídeo | Legenda | Cortes & IA)
+        self.tabs = UnderlineTabs(["Vídeo", "Legenda", "Cortes & IA"])
         root.addWidget(self.tabs)
 
-        # --- corpo rolavel (.settings-scroll)
+        # --- Corpo rolável
         self.stack = QStackedWidget()
         self.stack.addWidget(self._wrap_scroll(self._build_video_tab()))
         self.stack.addWidget(self._wrap_scroll(self._build_caption_tab()))
@@ -170,36 +187,53 @@ class SettingsDialog(QDialog):
         self.tabs.changed.connect(self.stack.setCurrentIndex)
         root.addWidget(self.stack, 1)
 
-        # --- rodape (.settings-foot)
+        # --- Rodapé
         foot = QFrame()
         foot.setObjectName("Footer")
         foot_layout = QHBoxLayout(foot)
-        foot_layout.setContentsMargins(26, 14, 26, 14)
+        foot_layout.setContentsMargins(20, 12, 20, 12)
 
-        restore_btn = QPushButton("Restaurar padroes")
+        restore_btn = QPushButton("Restaurar padrões")
         restore_btn.setObjectName("Ghost")
         restore_btn.setCursor(Qt.PointingHandCursor)
         restore_btn.clicked.connect(self._restore_defaults)
-
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setObjectName("Ghost")
-        cancel_btn.setCursor(Qt.PointingHandCursor)
-        cancel_btn.clicked.connect(self.reject)
-
-        save_btn = QPushButton("Salvar configuracoes")
-        save_btn.setObjectName("Primary")
-        save_btn.setCursor(Qt.PointingHandCursor)
-        save_btn.clicked.connect(self.accept)
-
         foot_layout.addWidget(restore_btn)
         foot_layout.addStretch(1)
-        foot_layout.addWidget(cancel_btn)
-        foot_layout.addWidget(save_btn)
+
+        if self.embedded:
+            self.status_hint = label(
+                "As alterações são aplicadas e salvas automaticamente.",
+                "Faint",
+            )
+            foot_layout.addWidget(self.status_hint)
+        else:
+            cancel_btn = QPushButton("Cancelar")
+            cancel_btn.setObjectName("Ghost")
+            cancel_btn.setCursor(Qt.PointingHandCursor)
+            cancel_btn.clicked.connect(self.reject)
+
+            save_btn = QPushButton("Salvar ajustes")
+            save_btn.setObjectName("Primary")
+            save_btn.setCursor(Qt.PointingHandCursor)
+            save_btn.clicked.connect(self.accept)
+
+            foot_layout.addWidget(cancel_btn)
+            foot_layout.addWidget(save_btn)
+
         root.addWidget(foot)
 
         self._load(options)
         self._connect_live_preview()
         self._refresh_preview()
+
+    def set_active_tab(self, index: int):
+        self.tabs.set_current(index)
+        self.stack.setCurrentIndex(index)
+
+    def reload_options(self, options: ProcessingOptions):
+        self.options = options
+        self._load(options)
+        self._refresh_preview(emit_change=False)
 
     @staticmethod
     def _wrap_scroll(content: QWidget) -> QScrollArea:
@@ -209,74 +243,80 @@ class SettingsDialog(QDialog):
         scroll.setWidget(content)
         return scroll
 
-    # --- abas ---------------------------------------------------------
+    # --- Abas ---------------------------------------------------------
     def _build_video_tab(self) -> QWidget:
         pane = QWidget()
         pane.setObjectName("Root")
         layout = QVBoxLayout(pane)
-        layout.setContentsMargins(26, 22, 26, 22)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
         layout.addWidget(label("ENQUADRAMENTO VERTICAL", "SectionTitle"))
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
-        grid1.setVerticalSpacing(14)
+        grid1.setVerticalSpacing(12)
 
         self.zoom = QDoubleSpinBox()
         self.zoom.setRange(1.0, 3.0)
         self.zoom.setSingleStep(0.05)
         self.zoom.setDecimals(2)
-        grid1.addWidget(_field_box("Zoom do video", self.zoom, "1.0 – 3.0"), 0, 0)
+        grid1.addWidget(_field_box("Zoom do vídeo", self.zoom, "1.0 – 3.0"), 0, 0)
 
         self.blur = QDoubleSpinBox()
         self.blur.setRange(0.0, 50.0)
         self.blur.setSingleStep(0.5)
         self.blur.setDecimals(1)
-        grid1.addWidget(_field_box("Desfoque do fundo", self.blur, "0 – 50"), 0, 1)
+        grid1.addWidget(
+            _field_box("Desfoque do fundo", self.blur, "0 – 50"), 0, 1
+        )
 
         self.bg_brightness = QDoubleSpinBox()
         self.bg_brightness.setRange(-0.5, 0.5)
         self.bg_brightness.setSingleStep(0.02)
         self.bg_brightness.setDecimals(2)
         grid1.addWidget(
-            _field_box("Brilho do fundo", self.bg_brightness, "-0.5 – 0.5"), 0, 2
+            _field_box("Brilho do fundo", self.bg_brightness, "-0.5 – 0.5"),
+            0,
+            2,
         )
 
         self.resolution = QComboBox()
         for res_label, width, height in RESOLUTIONS:
             self.resolution.addItem(res_label, (width, height))
-        grid1.addWidget(_field_box("Resolucao", self.resolution), 1, 0)
+        grid1.addWidget(_field_box("Resolução de saída", self.resolution), 1, 0)
 
         layout.addLayout(grid1)
         layout.addWidget(separator())
-        layout.addWidget(label("CODIFICACAO", "SectionTitle"))
+        layout.addWidget(label("CODIFICAÇÃO DE VÍDEO", "SectionTitle"))
 
         grid2 = QGridLayout()
         grid2.setHorizontalSpacing(14)
-        grid2.setVerticalSpacing(14)
+        grid2.setVerticalSpacing(12)
 
         self.crf = QSpinBox()
         self.crf.setRange(0, 51)
-        grid2.addWidget(_field_box("Qualidade / CRF", self.crf, "0 – 51"), 0, 0)
+        grid2.addWidget(
+            _field_box("Qualidade (CRF)", self.crf, "0 – 51"), 0, 0
+        )
 
         self.preset = QComboBox()
         self.preset.addItems(
             ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium"]
         )
-        grid2.addWidget(_field_box("Preset (CPU)", self.preset), 0, 1)
+        grid2.addWidget(_field_box("Preset de CPU", self.preset), 0, 1)
 
         self.encoder = QComboBox()
         self.encoder.addItems(
             ["auto", "libx264", "h264_nvenc", "h264_qsv", "h264_amf"]
         )
-        grid2.addWidget(_field_box("Encoder", self.encoder), 0, 2)
+        grid2.addWidget(_field_box("Encoder H.264", self.encoder), 0, 2)
 
         layout.addLayout(grid2)
 
         note = label(
-            "O modo auto tenta o encoder de hardware e cai para libx264 quando necessario. "
-            "CRF menor = mais qualidade e arquivos maiores.",
+            "O modo 'auto' utiliza aceleração por placa de vídeo (NVENC/QSV/AMF) quando disponível "
+            "e recorre ao libx264 como fallback. Valores menores de CRF produzem maior qualidade visual.",
             "Note",
             wrap=True,
         )
@@ -288,16 +328,16 @@ class SettingsDialog(QDialog):
         pane = QWidget()
         pane.setObjectName("Root")
         outer = QHBoxLayout(pane)
-        outer.setContentsMargins(26, 22, 26, 22)
-        outer.setSpacing(24)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(20)
 
-        # --- coluna de campos
+        # --- Coluna principal de controles
         left = QVBoxLayout()
-        left.setSpacing(14)
+        left.setSpacing(12)
 
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
-        self.captions_enabled_toggle = Switch("Gerar legendas dinamicas")
+        self.captions_enabled_toggle = Switch("Gerar legendas dinâmicas")
         top_bar.addWidget(self.captions_enabled_toggle)
         top_bar.addStretch(1)
         self.preset_status_badge = label("Preset: TikTok Studio", "MiniPill")
@@ -305,29 +345,24 @@ class SettingsDialog(QDialog):
         left.addLayout(top_bar)
 
         left.addWidget(separator())
-        left.addWidget(label("PRESETS VIRAIS", "SectionTitle"))
-        left.addWidget(
-            label(
-                "Escolha um estilo pronto em 1 clique. Para ajustes finos, expanda as Configurações Avançadas abaixo.",
-                "Faint",
-                wrap=True,
-            )
-        )
+        left.addWidget(label("ESTILOS PRONTOS (PRESETS)", "SectionTitle"))
 
-        self.preset_grid = PresetGrid(VIRAL_PRESETS, columns=2, parent=pane)
+        self.preset_grid = PresetGrid(VIRAL_PRESETS, columns=3, parent=pane)
         self.preset_grid.preset_selected.connect(self._on_preset_card_selected)
         left.addWidget(self.preset_grid)
 
         left.addWidget(separator())
 
-        # --- Menu retratil: Configuracoes Avancadas
+        # --- Seção retrátil: Configurações Avançadas
         self.advanced_box = CollapsibleBox(
-            "Configurações Avançadas", expanded=False, parent=pane
+            "Configurações Avançadas de Tipografia e Bloco",
+            expanded=False,
+            parent=pane,
         )
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
-        grid.setVerticalSpacing(13)
+        grid.setVerticalSpacing(10)
 
         self.caption_preset = QComboBox()
         self.caption_preset.addItems(list(PRESETS.keys()))
@@ -342,15 +377,21 @@ class SettingsDialog(QDialog):
         self.caption_font_size = QSpinBox()
         self.caption_font_size.setRange(24, 180)
         grid.addWidget(
-            _field_box("Tamanho", self.caption_font_size, "24 – 180"), 0, 1
+            _field_box("Tamanho (px)", self.caption_font_size, "24 – 180"),
+            0,
+            1,
         )
 
         self.caption_text_color = ColorButton()
-        grid.addWidget(_field_box("Cor do texto", self.caption_text_color), 1, 0)
+        grid.addWidget(
+            _field_box("Cor do texto base", self.caption_text_color), 1, 0
+        )
 
         self.caption_highlight_color = ColorButton()
         grid.addWidget(
-            _field_box("Cor do destaque", self.caption_highlight_color), 1, 1
+            _field_box("Cor da palavra ativa", self.caption_highlight_color),
+            1,
+            1,
         )
 
         self.caption_highlight_opacity = QDoubleSpinBox()
@@ -359,7 +400,7 @@ class SettingsDialog(QDialog):
         self.caption_highlight_opacity.setDecimals(2)
         grid.addWidget(
             _field_box(
-                "Opacidade do bloco", self.caption_highlight_opacity, "0 – 1"
+                "Opacidade da caixa", self.caption_highlight_opacity, "0 – 1"
             ),
             2,
             0,
@@ -368,13 +409,15 @@ class SettingsDialog(QDialog):
         self.caption_box_padding = QSpinBox()
         self.caption_box_padding.setRange(0, 60)
         grid.addWidget(
-            _field_box("Padding do bloco", self.caption_box_padding), 2, 1
+            _field_box("Padding da caixa", self.caption_box_padding), 2, 1
         )
 
         self.caption_corner_radius = QSpinBox()
         self.caption_corner_radius.setRange(0, 80)
         grid.addWidget(
-            _field_box("Cantos arredondados", self.caption_corner_radius), 3, 0
+            _field_box("Arredondamento da caixa", self.caption_corner_radius),
+            3,
+            0,
         )
 
         self.caption_word_spacing = QDoubleSpinBox()
@@ -383,7 +426,7 @@ class SettingsDialog(QDialog):
         self.caption_word_spacing.setDecimals(2)
         grid.addWidget(
             _field_box(
-                "Espaco entre palavras", self.caption_word_spacing, "0.5 – 1.5"
+                "Espaço entre palavras", self.caption_word_spacing, "0.5 – 1.5"
             ),
             3,
             1,
@@ -397,72 +440,73 @@ class SettingsDialog(QDialog):
         self.caption_outline_width = QSpinBox()
         self.caption_outline_width.setRange(0, 20)
         grid.addWidget(
-            _field_box("Contorno", self.caption_outline_width, "0 – 20"), 4, 1
+            _field_box("Espessura do contorno", self.caption_outline_width, "0 – 20"),
+            4,
+            1,
         )
 
         self.caption_max_words_per_line = QSpinBox()
         self.caption_max_words_per_line.setRange(1, 8)
         grid.addWidget(
-            _field_box("Palavras por linha", self.caption_max_words_per_line), 5, 0
+            _field_box("Palavras por linha", self.caption_max_words_per_line),
+            5,
+            0,
         )
 
         self.caption_max_lines = QSpinBox()
         self.caption_max_lines.setRange(1, 3)
-        grid.addWidget(_field_box("Linhas", self.caption_max_lines), 5, 1)
+        grid.addWidget(_field_box("Máximo de linhas", self.caption_max_lines), 5, 1)
 
         self.caption_margin_bottom = QSpinBox()
         self.caption_margin_bottom.setRange(0, 1200)
         self.caption_margin_bottom.setSingleStep(10)
         grid.addWidget(
-            _field_box("Margem do rodape", self.caption_margin_bottom, "px"), 6, 0
+            _field_box("Margem inferior", self.caption_margin_bottom, "px"),
+            6,
+            0,
         )
 
         self.caption_transcribe_mode = QComboBox()
         self.caption_transcribe_mode.addItem("Por clipe · mais preciso", "clip")
-        self.caption_transcribe_mode.addItem("Completa · mais rapido", "full")
+        self.caption_transcribe_mode.addItem("Completa · mais rápido", "full")
         grid.addWidget(
-            _field_box("Transcricao", self.caption_transcribe_mode), 6, 1
+            _field_box("Modo de transcrição", self.caption_transcribe_mode),
+            6,
+            1,
         )
 
         self.caption_animation = QComboBox()
         self.caption_animation.addItem("Pop / Padrão", "pop")
         self.caption_animation.addItem("Subir e Aparecer (Rise)", "rise")
         grid.addWidget(
-            _field_box("Animação", self.caption_animation), 7, 0
+            _field_box("Animação de entrada", self.caption_animation), 7, 0
         )
 
         self.advanced_box.set_content_layout(grid)
 
         toggles = QHBoxLayout()
-        toggles.setSpacing(22)
-        self.caption_uppercase = Switch("Texto em maiusculas")
+        toggles.setSpacing(20)
+        self.caption_uppercase = Switch("Forçar maiúsculas")
         toggles.addWidget(self.caption_uppercase)
-        self.caption_glow = Switch("Efeito Glow (brilho)")
+        self.caption_glow = Switch("Efeito Glow (halo)")
         toggles.addWidget(self.caption_glow)
         toggles.addStretch(1)
         self.advanced_box.set_content_layout(toggles)
-
-        self.advanced_box.add_widget(
-            label(
-                "Margens altas colocam a legenda na faixa desfocada do rodape. "
-                "O modo “por clipe” retranscreve cada corte e exige mais processamento.",
-                "Note",
-                wrap=True,
-            )
-        )
 
         left.addWidget(self.advanced_box)
         left.addStretch(1)
         outer.addLayout(left, 1)
 
-        # --- coluna lateral de previa (.settings-preview)
+        # --- Coluna lateral de prévia 9:16
         preview_box = QFrame()
         preview_box.setObjectName("SettingsPreviewBox")
         preview_layout = QVBoxLayout(preview_box)
-        preview_layout.setContentsMargins(13, 13, 13, 13)
+        preview_layout.setContentsMargins(12, 12, 12, 12)
         preview_layout.setSpacing(8)
-        preview_layout.addWidget(label("PREVIA", "SectionTitle"))
-        self.preview_widget = PhonePreviewWidget(phone_width=148, in_settings=True)
+        preview_layout.addWidget(label("PRÉVIA 9:16", "SectionTitle"))
+        self.preview_widget = PhonePreviewWidget(
+            phone_width=156, in_settings=True
+        )
         preview_layout.addWidget(self.preview_widget, 0, Qt.AlignHCenter)
         outer.addWidget(preview_box, 0, Qt.AlignTop)
 
@@ -472,37 +516,37 @@ class SettingsDialog(QDialog):
         pane = QWidget()
         pane.setObjectName("Root")
         layout = QVBoxLayout(pane)
-        layout.setContentsMargins(26, 22, 26, 22)
+        layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(label("SELECAO E IA", "SectionTitle"))
+        layout.addWidget(label("CRITÉRIOS DE SELEÇÃO E IA", "SectionTitle"))
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
-        grid1.setVerticalSpacing(14)
+        grid1.setVerticalSpacing(12)
 
         self.max_clips = QSpinBox()
         self.max_clips.setRange(1, 50)
         grid1.addWidget(
-            _field_box("Maximo de clipes", self.max_clips, "1 – 50"), 0, 0
+            _field_box("Máximo de clipes", self.max_clips, "1 – 50"), 0, 0
         )
 
         self.min_viral_score = QSpinBox()
         self.min_viral_score.setRange(1, 10)
         grid1.addWidget(
-            _field_box("Nota minima (viral)", self.min_viral_score, "1 – 10"),
+            _field_box("Nota mínima viral", self.min_viral_score, "1 – 10"),
             0,
             1,
         )
 
         self.whisper_model = QComboBox()
         for w_label, w_val in (
-            ("large · mais preciso", "large"),
-            ("turbo · rapido e preciso", "turbo"),
+            ("large · máxima precisão", "large"),
+            ("turbo · rápido e preciso", "turbo"),
             ("medium · equilibrado", "medium"),
             ("small · leve", "small"),
             ("base · muito leve", "base"),
-            ("tiny · ultra rapido", "tiny"),
+            ("tiny · ultra rápido", "tiny"),
         ):
             self.whisper_model.addItem(w_label, w_val)
         grid1.addWidget(
@@ -511,18 +555,20 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(grid1)
         layout.addWidget(separator())
-        layout.addWidget(label("DURACAO E RECORTE", "SectionTitle"))
+        layout.addWidget(label("DURAÇÃO E RECORTE", "SectionTitle"))
 
         grid2 = QGridLayout()
         grid2.setHorizontalSpacing(14)
-        grid2.setVerticalSpacing(14)
+        grid2.setVerticalSpacing(12)
 
         self.min_clip_duration = QSpinBox()
         self.min_clip_duration.setRange(10, 180)
         self.min_clip_duration.setSingleStep(5)
-        self.min_clip_duration.valueChanged.connect(self._on_min_duration_changed)
+        self.min_clip_duration.valueChanged.connect(
+            self._on_min_duration_changed
+        )
         grid2.addWidget(
-            _field_box("Duracao minima", self.min_clip_duration, "10 – 180s"),
+            _field_box("Duração mínima", self.min_clip_duration, "10 – 180s"),
             0,
             0,
         )
@@ -530,9 +576,11 @@ class SettingsDialog(QDialog):
         self.max_clip_duration = QSpinBox()
         self.max_clip_duration.setRange(15, 300)
         self.max_clip_duration.setSingleStep(5)
-        self.max_clip_duration.valueChanged.connect(self._on_max_duration_changed)
+        self.max_clip_duration.valueChanged.connect(
+            self._on_max_duration_changed
+        )
         grid2.addWidget(
-            _field_box("Duracao maxima", self.max_clip_duration, "15 – 300s"),
+            _field_box("Duração máxima", self.max_clip_duration, "15 – 300s"),
             0,
             1,
         )
@@ -542,7 +590,9 @@ class SettingsDialog(QDialog):
         self.pause_gap.setSingleStep(0.1)
         self.pause_gap.setDecimals(1)
         grid2.addWidget(
-            _field_box("Pausa para corte", self.pause_gap, "0.2 – 10s"), 0, 2
+            _field_box("Pausa natural para corte", self.pause_gap, "0.2 – 10s"),
+            0,
+            2,
         )
 
         self.padding_s = QDoubleSpinBox()
@@ -550,13 +600,15 @@ class SettingsDialog(QDialog):
         self.padding_s.setSingleStep(0.5)
         self.padding_s.setDecimals(1)
         grid2.addWidget(
-            _field_box("Margem (padding)", self.padding_s, "0 – 30s"), 1, 0
+            _field_box("Margem de segurança (padding)", self.padding_s, "0 – 30s"),
+            1,
+            0,
         )
 
         self.max_workers = QSpinBox()
         self.max_workers.setRange(1, 8)
         grid2.addWidget(
-            _field_box("Renderizacao paralela", self.max_workers, "1 – 8"),
+            _field_box("Workers de renderização", self.max_workers, "1 – 8"),
             1,
             1,
         )
@@ -564,9 +616,8 @@ class SettingsDialog(QDialog):
         layout.addLayout(grid2)
 
         note = label(
-            "A IA prioriza cortes nota 10, mas mantem todos os trechos independentes que atingirem a "
-            "nota minima (ate o teto de clipes). A duracao e ajustada automaticamente priorizando "
-            "pausas naturais da fala.",
+            "A IA seleciona trechos independentes que atinjam a nota mínima até o limite configurado. "
+            "Os cortes são ajustados automaticamente em pausas naturais da fala.",
             "Note",
             wrap=True,
         )
@@ -575,21 +626,20 @@ class SettingsDialog(QDialog):
         return pane
 
     def _on_min_duration_changed(self, value: int):
-        if hasattr(self, "max_clip_duration") and value > self.max_clip_duration.value():
+        if (
+            hasattr(self, "max_clip_duration")
+            and value > self.max_clip_duration.value()
+        ):
             self.max_clip_duration.setValue(value)
 
     def _on_max_duration_changed(self, value: int):
-        if hasattr(self, "min_clip_duration") and value < self.min_clip_duration.value():
+        if (
+            hasattr(self, "min_clip_duration")
+            and value < self.min_clip_duration.value()
+        ):
             self.min_clip_duration.setValue(value)
 
-    @staticmethod
-    def _wrap(layout) -> QWidget:
-        holder = QWidget()
-        holder.setLayout(layout)
-        return holder
-
     def _populate_font_combo(self):
-        """Preenche o seletor com fontes pré-configuradas e todas as fontes do computador."""
         qt_families = [
             f.strip()
             for f in QFontDatabase.families()
@@ -626,7 +676,6 @@ class SettingsDialog(QDialog):
             for name in system_fonts:
                 self.caption_font.addItem(name, name)
 
-    # --- carga / gravacao / previa ao vivo ----------------------------
     def _connect_live_preview(self):
         for spin in (
             self.zoom,
@@ -642,6 +691,13 @@ class SettingsDialog(QDialog):
             self.caption_max_words_per_line,
             self.caption_max_lines,
             self.caption_margin_bottom,
+            self.max_clips,
+            self.min_viral_score,
+            self.min_clip_duration,
+            self.max_clip_duration,
+            self.pause_gap,
+            self.padding_s,
+            self.max_workers,
         ):
             spin.valueChanged.connect(self._refresh_preview)
         for combo in (
@@ -651,6 +707,7 @@ class SettingsDialog(QDialog):
             self.caption_font,
             self.caption_transcribe_mode,
             self.caption_animation,
+            self.whisper_model,
         ):
             combo.currentIndexChanged.connect(self._refresh_preview)
             if combo.isEditable():
@@ -670,13 +727,16 @@ class SettingsDialog(QDialog):
         self._write_into(draft)
         return draft
 
-    def _refresh_preview(self, *_args):
+    def _refresh_preview(self, *_args, emit_change: bool = True):
         if self._syncing_preset:
             return
         draft = self._draft_options()
         if hasattr(self, "preview_widget"):
             self.preview_widget.set_options(draft)
         self._update_preset_status(draft)
+        if self.embedded and emit_change:
+            self._apply()
+            self.options_changed.emit(self.options)
 
     def _update_preset_status(self, options: ProcessingOptions):
         active_id = detect_active_preset(options)
@@ -716,17 +776,23 @@ class SettingsDialog(QDialog):
         self.caption_font_size.setValue(options.caption_font_size)
         self.caption_text_color.set_color(options.caption_text_color)
         self.caption_highlight_color.set_color(options.caption_highlight_color)
-        self.caption_highlight_opacity.setValue(options.caption_highlight_opacity)
+        self.caption_highlight_opacity.setValue(
+            options.caption_highlight_opacity
+        )
         self.caption_box_padding.setValue(options.caption_box_padding)
         self.caption_corner_radius.setValue(options.caption_corner_radius)
         self.caption_word_spacing.setValue(options.caption_word_spacing)
         self.caption_outline_color.set_color(options.caption_outline_color)
         self.caption_outline_width.setValue(options.caption_outline_width)
-        self.caption_max_words_per_line.setValue(options.caption_max_words_per_line)
+        self.caption_max_words_per_line.setValue(
+            options.caption_max_words_per_line
+        )
         self.caption_max_lines.setValue(options.caption_max_lines)
         self.caption_margin_bottom.setValue(options.caption_margin_bottom)
         self.caption_uppercase.setChecked(options.caption_uppercase)
-        self.caption_glow.setChecked(bool(getattr(options, "caption_glow", False)))
+        self.caption_glow.setChecked(
+            bool(getattr(options, "caption_glow", False))
+        )
 
         mode = options.caption_transcribe_mode or "clip"
         for idx in range(self.caption_transcribe_mode.count()):
@@ -794,7 +860,9 @@ class SettingsDialog(QDialog):
         options.crf = self.crf.value()
         options.preset = self.preset.currentText()
         options.encoder = (
-            "" if self.encoder.currentText() == "auto" else self.encoder.currentText()
+            ""
+            if self.encoder.currentText() == "auto"
+            else self.encoder.currentText()
         )
         res_data = self.resolution.currentData()
         if res_data:
@@ -809,13 +877,17 @@ class SettingsDialog(QDialog):
         options.caption_font_size = self.caption_font_size.value()
         options.caption_text_color = self.caption_text_color.color()
         options.caption_highlight_color = self.caption_highlight_color.color()
-        options.caption_highlight_opacity = self.caption_highlight_opacity.value()
+        options.caption_highlight_opacity = (
+            self.caption_highlight_opacity.value()
+        )
         options.caption_box_padding = self.caption_box_padding.value()
         options.caption_corner_radius = self.caption_corner_radius.value()
         options.caption_word_spacing = self.caption_word_spacing.value()
         options.caption_outline_color = self.caption_outline_color.color()
         options.caption_outline_width = self.caption_outline_width.value()
-        options.caption_max_words_per_line = self.caption_max_words_per_line.value()
+        options.caption_max_words_per_line = (
+            self.caption_max_words_per_line.value()
+        )
         options.caption_max_lines = self.caption_max_lines.value()
         options.caption_margin_bottom = self.caption_margin_bottom.value()
         options.caption_uppercase = self.caption_uppercase.isChecked()
@@ -849,4 +921,5 @@ class SettingsDialog(QDialog):
 
     def accept(self):
         self._apply()
+        self.options_changed.emit(self.options)
         super().accept()

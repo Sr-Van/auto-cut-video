@@ -1,25 +1,48 @@
-"""Tema visual do GUI, espelhando os tokens do design em site/assets/base.css e studio.css."""
+"""Sistema de design utilitário para o AutoCortesBR (Desktop Dark UI).
+
+Paleta sóbria em tons de grafite neutro, tipografia limpa e cores semânticas
+diretas (azul para ação principal, verde para sucesso/publicado, âmbar para
+progresso ativo e vermelho para erro/exclusão).
+"""
 
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
-# --- tokens (site/assets/base.css + studio.css) ---
-BG = "#08080c"
-BG_2 = "#0b0b10"
-PANEL = "#0d0d13"
-PANEL_2 = "#16161f"
-PANEL_3 = "#1c1c27"
-TEXT = "#f6f5f1"
-MUTED = "#a4a2b0"
-FAINT = "#71707e"
-LIME = "#c9ff4f"
-LIME_DEEP = "#a5e32c"
-VIOLET = "#8b5cf6"
-VIOLET_SOFT = "#b79aff"
-CORAL = "#ff7a59"
-LINE = "rgba(255, 255, 255, 0.075)"
-LINE_STRONG = "rgba(255, 255, 255, 0.14)"
-LINE_LIME = "rgba(201, 255, 79, 0.28)"
+# --- Superfícies (Grafite Neutro) ---
+BG = "#0F1115"
+BG_2 = "#13161C"
+PANEL = "#161920"
+PANEL_2 = "#1C2029"
+PANEL_3 = "#242936"
+
+# --- Tipografia ---
+TEXT = "#F3F4F6"
+MUTED = "#9CA3AF"
+FAINT = "#6B7280"
+
+# --- Ação e Semântica Direta ---
+ACCENT = "#2563EB"
+ACCENT_HOVER = "#1D4ED8"
+ACCENT_SOFT = "rgba(37, 99, 235, 0.14)"
+SUCCESS = "#10B981"
+SUCCESS_SOFT = "rgba(16, 185, 129, 0.14)"
+WARNING = "#F59E0B"
+WARNING_SOFT = "rgba(245, 158, 11, 0.14)"
+DANGER = "#EF4444"
+DANGER_SOFT = "rgba(239, 68, 68, 0.12)"
+
+# --- Bordas ---
+LINE = "#232834"
+LINE_STRONG = "#32394A"
+LINE_ACCENT = "rgba(37, 99, 235, 0.45)"
+
+# Aliases de compatibilidade com módulos existentes
+LIME = ACCENT
+LIME_DEEP = ACCENT_HOVER
+VIOLET = ACCENT
+VIOLET_SOFT = "#60A5FA"
+CORAL = DANGER
+LINE_LIME = LINE_ACCENT
 
 
 def _pick_font(candidates, fallback):
@@ -46,93 +69,120 @@ QToolTip {{
     background: {PANEL_3};
     color: {TEXT};
     border: 1px solid {LINE_STRONG};
-    padding: 6px 8px;
+    border-radius: 4px;
+    padding: 5px 8px;
 }}
 
-/* ---------- header ---------- */
+/* ---------- Header & Navegação ---------- */
 #Header {{
     background: {BG_2};
     border-bottom: 1px solid {LINE};
 }}
 #BrandMark {{
-    background: {LIME};
-    border-radius: 8px;
-    color: #0a0b07;
-    font-weight: 800;
-    font-size: 14px;
+    background: {ACCENT};
+    border-radius: 6px;
+    color: #FFFFFF;
+    font-weight: 700;
+    font-size: 12px;
 }}
 #Brand {{
-    font-size: 19px;
+    font-size: 15px;
     font-weight: 700;
-    letter-spacing: -0.4px;
+    color: {TEXT};
 }}
 #BrandTag {{
-    background: transparent;
+    background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
     border-radius: 4px;
-    color: {FAINT};
-    font-family: "{mono}";
-    font-size: 9px;
-    font-weight: 500;
-    padding: 1px 5px;
-}}
-#ServerPill {{
-    background: rgba(201, 255, 79, 0.06);
-    border: 1px solid rgba(201, 255, 79, 0.22);
-    border-radius: 14px;
-    color: {LIME};
-    font-family: "{mono}";
-    font-size: 11px;
-    padding: 4px 12px;
-}}
-
-/* ---------- intro ---------- */
-#Eyebrow {{
-    color: {LIME};
+    color: {MUTED};
     font-family: "{mono}";
     font-size: 10px;
-    font-weight: 500;
-    letter-spacing: 1.6px;
+    font-weight: 600;
+    padding: 1px 6px;
+}}
+#NavBar {{
+    background: {PANEL};
+    border: 1px solid {LINE};
+    border-radius: 7px;
+}}
+QPushButton#NavTab {{
+    background: transparent;
+    border: none;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: {MUTED};
+}}
+QPushButton#NavTab:hover:!checked {{
+    color: {TEXT};
+    background: rgba(255, 255, 255, 0.03);
+}}
+QPushButton#NavTab:checked {{
+    background: {ACCENT};
+    color: #FFFFFF;
+}}
+#StatusPill {{
+    background: {PANEL};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 5px;
+    color: {MUTED};
+    font-family: "{mono}";
+    font-size: 11px;
+    padding: 4px 10px;
+}}
+#StatusPill[state="busy"] {{
+    border-color: {WARNING};
+    color: {WARNING};
+    background: {WARNING_SOFT};
+}}
+#StatusPill[state="done"] {{
+    border-color: {SUCCESS};
+    color: {SUCCESS};
+    background: {SUCCESS_SOFT};
+}}
+#StatusPill[state="error"] {{
+    border-color: {DANGER};
+    color: {DANGER};
+    background: {DANGER_SOFT};
+}}
+
+/* ---------- Tipografia e Textos ---------- */
+#Eyebrow {{
+    color: {FAINT};
+    font-family: "{mono}";
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
 }}
 #Title {{
-    font-size: 32px;
+    font-size: 18px;
     font-weight: 700;
-    letter-spacing: -1px;
 }}
 #Subtitle, #Muted {{
     color: {MUTED};
-    font-size: 13px;
+    font-size: 12px;
 }}
-#Faint {{
+#Faint, #LocalNote {{
     color: {FAINT};
-    font-size: 11px;
-}}
-#LocalNote {{
-    color: {FAINT};
-    font-family: "{mono}";
     font-size: 11px;
 }}
 
-/* ---------- panels ---------- */
-#Panel {{
+/* ---------- Painéis ---------- */
+#Panel, #SourcePanel {{
     background: {PANEL};
     border: 1px solid {LINE};
-    border-radius: 18px;
-}}
-#SourcePanel {{
-    background: {PANEL};
-    border: 1px solid rgba(201, 255, 79, 0.20);
-    border-radius: 18px;
+    border-radius: 8px;
 }}
 #PanelTitle {{
-    font-size: 18px;
+    font-size: 14px;
     font-weight: 600;
-    letter-spacing: -0.4px;
+    color: {TEXT};
 }}
 #PanelTitleCompact {{
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
-    letter-spacing: -0.3px;
+    color: {TEXT};
 }}
 #FieldLabel {{
     color: {MUTED};
@@ -142,31 +192,34 @@ QToolTip {{
 #FieldHint {{
     color: {FAINT};
     font-family: "{mono}";
-    font-size: 10px;
+    font-size: 11px;
 }}
 
-/* ---------- inputs ---------- */
-QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {{
-    background: rgba(255, 255, 255, 0.03);
+/* ---------- Inputs ---------- */
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{
+    background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
-    border-radius: 10px;
-    padding: 8px 12px;
-    font-size: 13px;
-    selection-background-color: {LIME};
-    selection-color: #0a0a0d;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: {TEXT};
+    selection-background-color: {ACCENT};
+    selection-color: #FFFFFF;
 }}
 QLineEdit#MonoInput {{
     font-family: "{mono}";
-    font-size: 12px;
+    font-size: 11px;
 }}
-QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
-    border: 1px solid {LIME};
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{
+    border: 1px solid {ACCENT};
 }}
 QLineEdit:read-only {{
     color: {MUTED};
 }}
-QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled {{
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabled, QPlainTextEdit:disabled {{
     color: {FAINT};
+    background: {BG_2};
+    border-color: {LINE};
 }}
 QSpinBox::up-button, QSpinBox::down-button,
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
@@ -175,81 +228,86 @@ QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
 }}
 QComboBox::drop-down {{
     border: none;
-    width: 24px;
+    width: 22px;
 }}
 QComboBox QAbstractItemView {{
     background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
-    selection-background-color: {PANEL_3};
-    selection-color: {LIME};
+    selection-background-color: {ACCENT};
+    selection-color: #FFFFFF;
     outline: none;
     padding: 4px;
 }}
 
-/* ---------- botoes ---------- */
+/* ---------- Botões ---------- */
 QPushButton {{
-    background: rgba(255, 255, 255, 0.025);
+    background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
-    border-radius: 18px;
-    padding: 8px 16px;
+    border-radius: 6px;
+    padding: 6px 12px;
     font-size: 12px;
     font-weight: 600;
+    color: {TEXT};
 }}
 QPushButton:hover {{
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.25);
+    background: {PANEL_3};
+    border-color: #434C63;
 }}
 QPushButton:disabled {{
     color: {FAINT};
+    background: {BG_2};
     border-color: {LINE};
 }}
 QPushButton#Primary {{
-    background: {LIME};
-    color: #0a0b07;
-    border: 1px solid {LIME};
-    border-radius: 18px;
-    font-weight: 700;
+    background: {ACCENT};
+    color: #FFFFFF;
+    border: 1px solid {ACCENT};
+    border-radius: 6px;
+    font-weight: 600;
 }}
 QPushButton#Primary:hover {{
-    background: {LIME_DEEP};
-    border-color: {LIME_DEEP};
+    background: {ACCENT_HOVER};
+    border-color: {ACCENT_HOVER};
 }}
 QPushButton#Primary:disabled {{
-    background: {PANEL_3};
+    background: {PANEL_2};
     border-color: {LINE};
     color: {FAINT};
 }}
 QPushButton#ProcessButton {{
-    background: {LIME};
-    color: #0a0b07;
-    border: none;
-    border-radius: 24px;
-    padding: 14px;
-    font-size: 14px;
-    font-weight: 700;
+    background: {ACCENT};
+    color: #FFFFFF;
+    border: 1px solid {ACCENT};
+    border-radius: 6px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
 }}
 QPushButton#ProcessButton:hover {{
-    background: {LIME_DEEP};
+    background: {ACCENT_HOVER};
+    border-color: {ACCENT_HOVER};
 }}
 QPushButton#ProcessButton:disabled {{
-    background: {PANEL_3};
-    color: {MUTED};
+    background: {PANEL_2};
+    border-color: {LINE};
+    color: {FAINT};
 }}
 QPushButton#Ghost {{
-    background: rgba(255, 255, 255, 0.025);
+    background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
-    border-radius: 17px;
-    padding: 7px 14px;
+    border-radius: 6px;
+    padding: 6px 12px;
     font-size: 12px;
+    color: {TEXT};
 }}
 QPushButton#Ghost:hover {{
-    background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(255, 255, 255, 0.25);
+    background: {PANEL_3};
+    border-color: #434C63;
 }}
 QPushButton#IconBtn {{
-    background: rgba(255, 255, 255, 0.025);
+    background: {PANEL_2};
     border: 1px solid {LINE};
-    border-radius: 8px;
+    border-radius: 5px;
     padding: 4px 8px;
     color: {MUTED};
     font-size: 12px;
@@ -257,44 +315,44 @@ QPushButton#IconBtn {{
 QPushButton#IconBtn:hover {{
     border-color: {LINE_STRONG};
     color: {TEXT};
+    background: {PANEL_3};
 }}
 QPushButton#Link {{
     background: transparent;
     border: none;
-    color: {FAINT};
-    padding: 2px 4px;
+    color: {MUTED};
+    padding: 2px 6px;
     font-size: 11px;
 }}
 QPushButton#Link:hover {{
     color: {TEXT};
 }}
 
-/* abas segmentadas (Link / Arquivo) */
+/* ---------- Abas Segmentadas e Sublinhadas ---------- */
 #Segmented {{
-    background: rgba(0, 0, 0, 0.25);
+    background: {BG_2};
     border: 1px solid {LINE};
-    border-radius: 9px;
+    border-radius: 6px;
 }}
 QPushButton#Segment {{
     background: transparent;
     border: none;
-    border-radius: 6px;
-    padding: 5px 14px;
+    border-radius: 4px;
+    padding: 4px 12px;
     font-size: 11px;
-    font-weight: 500;
-    color: {FAINT};
+    font-weight: 600;
+    color: {MUTED};
 }}
 QPushButton#Segment:checked {{
-    background: rgba(255, 255, 255, 0.09);
+    background: {PANEL_3};
     color: {TEXT};
 }}
 QPushButton#Segment:hover:!checked {{
     color: {TEXT};
 }}
 
-/* abas sublinhadas (.settings-tabs) */
 #UnderlineBar {{
-    background: {BG};
+    background: {BG_2};
     border-bottom: 1px solid {LINE};
 }}
 QPushButton#UnderlineTab {{
@@ -302,192 +360,211 @@ QPushButton#UnderlineTab {{
     border: none;
     border-bottom: 2px solid transparent;
     border-radius: 0px;
-    padding: 11px 14px;
+    padding: 10px 14px;
     font-size: 12px;
     font-weight: 600;
-    color: {FAINT};
+    color: {MUTED};
 }}
 QPushButton#UnderlineTab:checked {{
     color: {TEXT};
-    border-bottom: 2px solid {LIME};
+    border-bottom: 2px solid {ACCENT};
 }}
 QPushButton#UnderlineTab:hover:!checked {{
     color: {TEXT};
 }}
 
-/* dropzone e arquivo selecionado */
+/* ---------- Dropzone e Arquivo Selecionado ---------- */
 QPushButton#Dropzone {{
-    background: rgba(0, 0, 0, 0.16);
-    border: 1px dashed rgba(255, 255, 255, 0.16);
-    border-radius: 12px;
-    padding: 26px 20px;
+    background: {BG_2};
+    border: 1px dashed {LINE_STRONG};
+    border-radius: 6px;
+    padding: 18px 16px;
     color: {MUTED};
     font-size: 12px;
     font-weight: 500;
 }}
 QPushButton#Dropzone:hover {{
-    border-color: {LINE_LIME};
-    background: rgba(201, 255, 79, 0.04);
+    border-color: {ACCENT};
+    background: {ACCENT_SOFT};
     color: {TEXT};
 }}
 #FileSelected {{
-    background: rgba(201, 255, 79, 0.04);
-    border: 1px solid {LINE};
-    border-radius: 10px;
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 6px;
 }}
 #FileSelectedBadge {{
-    background: rgba(201, 255, 79, 0.10);
-    border-radius: 8px;
-    color: {LIME};
+    background: {ACCENT_SOFT};
+    border-radius: 5px;
+    color: {ACCENT};
     font-weight: 700;
 }}
 
-/* ---------- progresso ---------- */
+/* ---------- Progresso e Etapas ---------- */
 QProgressBar {{
-    background: rgba(255, 255, 255, 0.07);
+    background: {PANEL_2};
     border: none;
     border-radius: 3px;
-    max-height: 5px;
-    min-height: 5px;
+    max-height: 6px;
+    min-height: 6px;
     text-align: center;
     color: transparent;
 }}
 QProgressBar::chunk {{
     border-radius: 3px;
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 {VIOLET}, stop:1 {LIME});
+    background: {ACCENT};
 }}
 #StageLabel {{
-    color: {MUTED};
+    color: {TEXT};
     font-family: "{mono}";
     font-size: 11px;
-}}
-#Percent {{
-    color: {LIME};
-    font-family: "{mono}";
-    font-size: 17px;
     font-weight: 600;
 }}
+#Percent {{
+    color: {ACCENT};
+    font-family: "{mono}";
+    font-size: 14px;
+    font-weight: 700;
+}}
 #Step {{
-    background: rgba(255, 255, 255, 0.015);
+    background: {BG_2};
     border: 1px solid {LINE};
-    border-radius: 8px;
+    border-radius: 6px;
 }}
 #Step[state="active"] {{
-    border-color: rgba(201, 255, 79, 0.26);
-    background: rgba(201, 255, 79, 0.05);
+    border-color: {WARNING};
+    background: {WARNING_SOFT};
 }}
 #Step[state="done"] {{
-    border-color: {LINE_STRONG};
+    border-color: rgba(16, 185, 129, 0.35);
+    background: rgba(16, 185, 129, 0.06);
 }}
 #Step[state="error"] {{
-    border-color: {CORAL};
+    border-color: {DANGER};
+    background: {DANGER_SOFT};
 }}
 #StepDot {{
-    background: #35343f;
+    background: {FAINT};
     border-radius: 3px;
     margin-top: 4px;
 }}
-#Step[state="active"] #StepDot,
+#Step[state="active"] #StepDot {{
+    background: {WARNING};
+}}
 #Step[state="done"] #StepDot {{
-    background: {LIME};
+    background: {SUCCESS};
 }}
 #Step[state="error"] #StepDot {{
-    background: {CORAL};
+    background: {DANGER};
 }}
 #StepTitle {{
     font-size: 11px;
     font-weight: 600;
-    color: #6c6b77;
+    color: {MUTED};
 }}
 #Step[state="active"] #StepTitle {{
     color: {TEXT};
 }}
 #Step[state="done"] #StepTitle {{
-    color: #9695a1;
+    color: {TEXT};
 }}
 #StepHint {{
-    color: #4a4954;
+    color: {FAINT};
     font-size: 10px;
 }}
 
 QPlainTextEdit#Log {{
-    background: rgba(0, 0, 0, 0.25);
+    background: {BG};
     border: 1px solid {LINE};
-    border-radius: 9px;
-    padding: 10px 12px;
-    color: #7b7a87;
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: {MUTED};
     font-family: "{mono}";
     font-size: 11px;
-    selection-background-color: {LIME};
-    selection-color: #0a0a0d;
+    selection-background-color: {ACCENT};
+    selection-color: #FFFFFF;
 }}
 
-/* ---------- resumo e ajuda ---------- */
+/* ---------- Resumo e Auxiliares ---------- */
 #SummaryKey {{
     color: {FAINT};
     font-size: 12px;
 }}
 #SummaryValue {{
-    color: {MUTED};
+    color: {TEXT};
     font-family: "{mono}";
     font-size: 11px;
 }}
 #Separator {{
-    background: rgba(255, 255, 255, 0.045);
+    background: {LINE};
     max-height: 1px;
     min-height: 1px;
 }}
 #MiniPill {{
-    background: transparent;
-    border: 1px solid {LINE};
-    border-radius: 11px;
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 4px;
     color: {MUTED};
     font-family: "{mono}";
     font-size: 10px;
-    padding: 2px 8px;
+    padding: 2px 7px;
 }}
 #CodeBlock {{
-    background: rgba(0, 0, 0, 0.24);
+    background: {BG};
     border: 1px solid {LINE};
-    border-radius: 7px;
-    color: {LIME};
+    border-radius: 5px;
+    color: {TEXT};
     font-family: "{mono}";
     font-size: 11px;
-    padding: 8px 10px;
+    padding: 6px 10px;
 }}
 
-/* ---------- resultados ---------- */
+/* ---------- Resultados (Cortes) ---------- */
 #ResultCard {{
     background: {PANEL};
     border: 1px solid {LINE};
-    border-radius: 14px;
+    border-radius: 8px;
+}}
+#ResultCard:hover {{
+    border-color: {LINE_STRONG};
 }}
 #ResultMedia {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #2c2548, stop:1 #0c0b12);
-    border: 1px solid {LINE};
-    border-radius: 9px;
-    color: {LIME};
+    background: {BG};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 6px;
+    color: {TEXT};
     font-family: "{mono}";
     font-size: 11px;
+    font-weight: 600;
+}}
+#ResultMedia:hover {{
+    border-color: {ACCENT};
+    background: {PANEL_2};
 }}
 #ClipCat {{
-    border: 1px solid {LINE};
-    border-radius: 9px;
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 4px;
     color: {MUTED};
     font-family: "{mono}";
     font-size: 10px;
-    padding: 2px 7px;
+    font-weight: 600;
+    padding: 2px 6px;
 }}
 #ClipScore {{
-    background: rgba(201, 255, 79, 0.12);
-    color: {LIME};
-    border-radius: 5px;
+    background: {SUCCESS_SOFT};
+    color: {SUCCESS};
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    border-radius: 4px;
     font-family: "{mono}";
-    font-weight: 600;
+    font-weight: 700;
     font-size: 11px;
-    padding: 2px 7px;
+    padding: 2px 6px;
+}}
+#ClipScore[tier="mid"] {{
+    background: {ACCENT_SOFT};
+    color: #60A5FA;
+    border: 1px solid rgba(37, 99, 235, 0.35);
 }}
 #ClipTime {{
     color: {FAINT};
@@ -495,13 +572,14 @@ QPlainTextEdit#Log {{
     font-size: 11px;
 }}
 #ClipTitle {{
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
+    color: {TEXT};
 }}
 #ClipHook {{
-    border-left: 2px solid rgba(201, 255, 79, 0.45);
+    border-left: 2px solid {ACCENT};
     padding-left: 8px;
-    color: #c0bfc9;
+    color: {MUTED};
     font-size: 12px;
 }}
 #ClipAnalysis {{
@@ -509,133 +587,127 @@ QPlainTextEdit#Log {{
     font-size: 11px;
 }}
 #ClipPath {{
-    color: #4e4d59;
+    color: {FAINT};
     font-family: "{mono}";
     font-size: 10px;
 }}
 #ResultsEmpty {{
-    border: 1px dashed {LINE};
-    border-radius: 14px;
+    background: {BG_2};
+    border: 1px dashed {LINE_STRONG};
+    border-radius: 6px;
     color: {FAINT};
     font-size: 12px;
-    padding: 28px 18px;
+    padding: 24px 16px;
 }}
 
-/* ---------- projetos e publicacao ---------- */
+/* ---------- Projetos e Publicação ---------- */
 QPushButton#PublishedBtn {{
-    background: rgba(255, 255, 255, 0.025);
+    background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
-    border-radius: 14px;
-    padding: 5px 12px;
+    border-radius: 5px;
+    padding: 5px 10px;
     font-size: 11px;
     font-weight: 600;
     color: {MUTED};
 }}
 QPushButton#PublishedBtn:hover {{
-    background: rgba(34, 197, 94, 0.10);
-    border-color: rgba(34, 197, 94, 0.45);
-    color: #86efac;
+    background: {SUCCESS_SOFT};
+    border-color: {SUCCESS};
+    color: {SUCCESS};
 }}
 QPushButton#PublishedBtn[published="true"],
 QPushButton#PublishedBtn:checked {{
-    background: rgba(34, 197, 94, 0.16);
-    border: 1px solid #22c55e;
-    color: #4ade80;
+    background: {SUCCESS_SOFT};
+    border: 1px solid {SUCCESS};
+    color: {SUCCESS};
     font-weight: 700;
 }}
-QPushButton#PublishedBtn[published="true"]:hover,
-QPushButton#PublishedBtn:checked:hover {{
-    background: rgba(34, 197, 94, 0.26);
-    border-color: #4ade80;
-    color: #86efac;
-}}
 QPushButton#Danger {{
-    background: rgba(239, 68, 68, 0.08);
+    background: {DANGER_SOFT};
     border: 1px solid rgba(239, 68, 68, 0.35);
-    border-radius: 17px;
-    padding: 7px 14px;
+    border-radius: 6px;
+    padding: 6px 12px;
     font-size: 12px;
     font-weight: 600;
-    color: #f87171;
+    color: #F87171;
 }}
 QPushButton#Danger:hover {{
-    background: rgba(239, 68, 68, 0.18);
-    border-color: #ef4444;
-    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.22);
+    border-color: {DANGER};
+    color: #FCA5A5;
 }}
 #ProjectAccordion {{
     background: {PANEL};
     border: 1px solid {LINE};
-    border-radius: 14px;
+    border-radius: 8px;
 }}
 #ProjectAccordion[expanded="true"] {{
-    border: 1px solid rgba(201, 255, 79, 0.24);
+    border: 1px solid {LINE_STRONG};
 }}
 QPushButton#ProjectHeaderBtn {{
     background: transparent;
     border: none;
-    border-radius: 14px;
-    padding: 14px 18px;
+    border-radius: 8px;
+    padding: 12px 16px;
     text-align: left;
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
 }}
 QPushButton#ProjectHeaderBtn:hover {{
-    background: rgba(255, 255, 255, 0.025);
+    background: rgba(255, 255, 255, 0.02);
 }}
 #ProjectClipCard {{
-    background: rgba(255, 255, 255, 0.02);
+    background: {BG_2};
     border: 1px solid {LINE};
-    border-radius: 12px;
+    border-radius: 6px;
 }}
 
-
-/* ---------- configuracoes ---------- */
+/* ---------- Configurações ---------- */
 #SettingsHead {{
-    background: {BG};
+    background: {BG_2};
     border-bottom: 1px solid {LINE};
 }}
 #SettingsPreviewBox {{
-    background: rgba(0, 0, 0, 0.18);
+    background: {PANEL};
     border: 1px solid {LINE};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 #SectionTitle {{
     color: {FAINT};
     font-family: "{mono}";
     font-size: 10px;
-    letter-spacing: 1.3px;
-    padding-top: 4px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    padding-top: 2px;
 }}
 #Note {{
     color: {FAINT};
     font-size: 11px;
 }}
 #Footer {{
-    background: #101017;
+    background: {BG_2};
     border-top: 1px solid {LINE};
 }}
 #StudioFooter {{
     border-top: 1px solid {LINE};
-    color: #4c4b57;
+    color: {FAINT};
     font-family: "{mono}";
     font-size: 10px;
 }}
 
-/* ---------- scrollbars ---------- */
+/* ---------- Scrollbars ---------- */
 QScrollBar:vertical {{
-    background: #0a0a0e;
-    width: 10px;
+    background: {BG};
+    width: 8px;
     margin: 0px;
 }}
 QScrollBar::handle:vertical {{
-    background: #2a2a35;
-    border: 2px solid #0a0a0e;
-    border-radius: 5px;
-    min-height: 30px;
+    background: {PANEL_3};
+    border-radius: 4px;
+    min-height: 28px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background: #3a3a48;
+    background: {LINE_STRONG};
 }}
 QScrollBar::add-line, QScrollBar::sub-line,
 QScrollBar::add-page, QScrollBar::sub-page {{
@@ -653,30 +725,34 @@ QMessageBox QLabel {{
 
 
 def apply_theme(app: QApplication):
-    """Aplica paleta escura + QSS com os tokens do site."""
+    """Aplica paleta utilitária escura e folha de estilo limpa."""
     app.setStyle("Fusion")
 
-    sans = _pick_font(["Sora", "Segoe UI Variable Text", "Segoe UI"], "Segoe UI")
-    serif = _pick_font(["Instrument Serif", "Georgia"], "Georgia")
-    mono = _pick_font(["JetBrains Mono", "Cascadia Code", "Consolas"], "Consolas")
+    sans = _pick_font(
+        ["Segoe UI Variable Text", "Inter", "Segoe UI"], "Segoe UI"
+    )
+    serif = sans
+    mono = _pick_font(
+        ["JetBrains Mono", "Cascadia Code", "Consolas"], "Consolas"
+    )
 
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(BG))
     palette.setColor(QPalette.WindowText, QColor(TEXT))
-    palette.setColor(QPalette.Base, QColor(BG_2))
+    palette.setColor(QPalette.Base, QColor(PANEL_2))
     palette.setColor(QPalette.AlternateBase, QColor(PANEL))
     palette.setColor(QPalette.Text, QColor(TEXT))
     palette.setColor(QPalette.Button, QColor(PANEL_2))
     palette.setColor(QPalette.ButtonText, QColor(TEXT))
-    palette.setColor(QPalette.Highlight, QColor(LIME))
-    palette.setColor(QPalette.HighlightedText, QColor("#0a0a0d"))
+    palette.setColor(QPalette.Highlight, QColor(ACCENT))
+    palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
     palette.setColor(QPalette.PlaceholderText, QColor(FAINT))
     palette.setColor(QPalette.ToolTipBase, QColor(PANEL_3))
     palette.setColor(QPalette.ToolTipText, QColor(TEXT))
     app.setPalette(palette)
 
     font = QFont(sans)
-    font.setPointSizeF(10)
+    font.setPointSizeF(9.5)
     app.setFont(font)
     app.setStyleSheet(stylesheet(sans, serif, mono))
     app.setProperty("serif_family", serif)

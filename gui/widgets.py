@@ -1,4 +1,4 @@
-""" Componentes visuais reutilizáveis e prévia de celular 9:16 espelhando o design de /site """
+"""Componentes visuais reutilizáveis e prévia vertical 9:16 do AutoCortesBR."""
 
 from PySide6.QtCore import (
     Property,
@@ -18,7 +18,6 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
-    QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
@@ -45,12 +44,9 @@ def label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
 
 
 def eyebrow(text: str) -> QLabel:
-    """Kicker com traço na esquerda (igual `.eyebrow` do site)."""
-    lbl = QLabel(
-        f'<span style="color:{theme.LIME}; opacity:0.75;">—</span>&nbsp;&nbsp;{text.upper()}'
-    )
+    """Rótulo de seção compacto em caixa alta, sem ornamentos decorativos."""
+    lbl = QLabel(text.upper())
     lbl.setObjectName("Eyebrow")
-    lbl.setTextFormat(Qt.RichText)
     return lbl
 
 
@@ -62,7 +58,7 @@ def separator() -> QFrame:
 
 
 class Panel(QFrame):
-    """Cartão `.panel` do site com eyebrow, título e slot opcional no cabeçalho."""
+    """Painel utilitário com cabeçalho limpo e slot opcional para controles."""
 
     def __init__(
         self,
@@ -76,18 +72,23 @@ class Panel(QFrame):
         self.setObjectName("SourcePanel" if source_accent else "Panel")
 
         self.body = QVBoxLayout(self)
-        self.body.setContentsMargins(22, 20, 22, 22)
-        self.body.setSpacing(14)
+        pad = 14 if compact else 16
+        self.body.setContentsMargins(pad, pad, pad, pad)
+        self.body.setSpacing(10 if compact else 12)
 
         self.head = QHBoxLayout()
-        self.head.setSpacing(12)
-        titles = QVBoxLayout()
-        titles.setSpacing(4)
-        titles.addWidget(eyebrow(kicker))
-        titles.addWidget(
-            label(title, "PanelTitleCompact" if compact else "PanelTitle")
+        self.head.setContentsMargins(0, 0, 0, 0)
+        self.head.setSpacing(10)
+
+        title_lbl = label(
+            title, "PanelTitleCompact" if compact else "PanelTitle"
         )
-        self.head.addLayout(titles)
+        self.head.addWidget(title_lbl)
+
+        if kicker and kicker.lower() != title.lower():
+            sub_lbl = label(kicker, "Faint")
+            self.head.addWidget(sub_lbl)
+
         self.head.addStretch(1)
         self.body.addLayout(self.head)
 
@@ -96,7 +97,7 @@ class Panel(QFrame):
 
 
 class Switch(QAbstractButton):
-    """Interruptor `.switch-row` animado."""
+    """Interruptor booleano enxuto e direto."""
 
     def __init__(self, text: str = "", parent=None):
         super().__init__(parent)
@@ -105,13 +106,13 @@ class Switch(QAbstractButton):
         self.setCursor(Qt.PointingHandCursor)
         self._offset = 0.0
         self._anim = QPropertyAnimation(self, b"offset", self)
-        self._anim.setDuration(180)
+        self._anim.setDuration(140)
         self._anim.setEasingCurve(QEasingCurve.OutCubic)
         self.toggled.connect(self._animate)
 
     def sizeHint(self):
-        width = 34 + 10 + self.fontMetrics().horizontalAdvance(self.text()) + 6
-        return QSize(width, 24)
+        width = 34 + 8 + self.fontMetrics().horizontalAdvance(self.text()) + 6
+        return QSize(width, 22)
 
     def _animate(self, checked):
         self._anim.stop()
@@ -140,8 +141,8 @@ class Switch(QAbstractButton):
         enabled = self.isEnabled()
 
         track = QRectF(0, (self.height() - 18) / 2, 32, 18)
-        off = QColor("#2b2a35")
-        on = QColor(theme.LIME)
+        off = QColor("#282E3B")
+        on = QColor(theme.ACCENT)
         color = QColor(
             int(off.red() + (on.red() - off.red()) * self._offset),
             int(off.green() + (on.green() - off.green()) * self._offset),
@@ -156,17 +157,19 @@ class Switch(QAbstractButton):
         knob_x = track.left() + 3 + (32 - 18) * self._offset
         knob = QRectF(knob_x, track.top() + 3, 12, 12)
         painter.setBrush(
-            QColor("#0a0a0d") if self._offset > 0.5 else QColor("#8b8a96")
+            QColor("#FFFFFF") if self._offset > 0.5 else QColor("#9CA3AF")
         )
         painter.drawEllipse(knob)
 
-        painter.setPen(QColor(theme.MUTED if enabled else theme.FAINT))
-        text_rect = self.rect().adjusted(42, 0, 0, 0)
-        painter.drawText(text_rect, Qt.AlignVCenter | Qt.AlignLeft, self.text())
+        painter.setPen(QColor(theme.TEXT if enabled else theme.FAINT))
+        text_rect = self.rect().adjusted(40, 0, 0, 0)
+        painter.drawText(
+            text_rect, Qt.AlignVCenter | Qt.AlignLeft, self.text()
+        )
 
 
 class Segmented(QFrame):
-    """Abas segmentadas `.source-tabs`."""
+    """Controle segmentado compacto."""
 
     changed = Signal(int)
 
@@ -174,8 +177,8 @@ class Segmented(QFrame):
         super().__init__(parent)
         self.setObjectName("Segmented")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(3, 3, 3, 3)
-        layout.setSpacing(3)
+        layout.setContentsMargins(2, 2, 2, 2)
+        layout.setSpacing(2)
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         for index, text in enumerate(labels):
@@ -202,7 +205,7 @@ class Segmented(QFrame):
 
 
 class UnderlineTabs(QFrame):
-    """Abas sublinhadas em lime (`.settings-tabs` do modal de configurações)."""
+    """Abas horizontais sublinhadas com indicador sólido."""
 
     changed = Signal(int)
 
@@ -210,7 +213,7 @@ class UnderlineTabs(QFrame):
         super().__init__(parent)
         self.setObjectName("UnderlineBar")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(26, 0, 26, 0)
+        layout.setContentsMargins(20, 0, 20, 0)
         layout.setSpacing(4)
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
@@ -229,15 +232,20 @@ class UnderlineTabs(QFrame):
         if checked:
             self.changed.emit(index)
 
+    def set_current(self, index: int):
+        btn = self.group.button(index)
+        if btn:
+            btn.setChecked(True)
+
 
 class PipeStep(QFrame):
-    """Card de etapa do pipeline (`.pipe-step` do site)."""
+    """Indicador compacto de etapa do pipeline."""
 
     def __init__(self, title: str, hint: str, parent=None):
         super().__init__(parent)
         self.setObjectName("Step")
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setContentsMargins(10, 7, 10, 7)
         layout.setSpacing(7)
 
         dot = QFrame()
@@ -274,14 +282,16 @@ SAMPLE_WORDS = [
 
 
 class PhonePreviewWidget(QWidget):
-    """Renderiza o `.preview-phone` do site com cena, silhueta, zoom e legenda ao vivo."""
+    """Prévia técnica 9:16 neutra, destacando enquadramento, zoom e legenda real."""
 
-    def __init__(self, phone_width: int = 200, in_settings: bool = False, parent=None):
+    def __init__(
+        self, phone_width: int = 160, in_settings: bool = False, parent=None
+    ):
         super().__init__(parent)
         self._phone_width = phone_width
         self._in_settings = in_settings
         self._options = ProcessingOptions()
-        self.setFixedSize(phone_width + 28, int(phone_width * 16 / 9) + 28)
+        self.setFixedSize(phone_width + 20, int(phone_width * 16 / 9) + 20)
 
     def set_options(self, options: ProcessingOptions):
         self._options = options
@@ -293,31 +303,24 @@ class PhonePreviewWidget(QWidget):
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.TextAntialiasing)
 
-        # Estágio externo arredondado
+        # Container externo sóbrio
         stage_rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
         stage_path = QPainterPath()
-        stage_path.addRoundedRect(stage_rect, 12, 12)
-        stage_grad = QRadialGradient(
-            stage_rect.center().x(),
-            stage_rect.bottom(),
-            stage_rect.height() * 0.75,
-        )
-        stage_grad.setColorAt(0.0, QColor(139, 92, 246, 28))
-        stage_grad.setColorAt(1.0, QColor(0, 0, 0, 48))
-        painter.fillPath(stage_path, stage_grad)
-        painter.setPen(QPen(QColor(255, 255, 255, 19), 1))
+        stage_path.addRoundedRect(stage_rect, 8, 8)
+        painter.fillPath(stage_path, QColor("#111318"))
+        painter.setPen(QPen(QColor(theme.LINE), 1))
         painter.drawPath(stage_path)
 
-        # Proporção da tela do telefone
+        # Proporção da tela
         ratio = (opts.width / opts.height) if opts.height else (9 / 16)
-        max_w = self.width() - 28
-        max_h = self.height() - 28
+        max_w = self.width() - 20
+        max_h = self.height() - 20
         pw = min(max_w, max_h * ratio)
         ph = pw / ratio
         px = (self.width() - pw) / 2
         py = (self.height() - ph) / 2
         phone_rect = QRectF(px, py, pw, ph)
-        radius = 17.0 if self._in_settings else 22.0
+        radius = 12.0 if self._in_settings else 14.0
 
         phone_path = QPainterPath()
         phone_path.addRoundedRect(phone_rect, radius, radius)
@@ -325,7 +328,7 @@ class PhonePreviewWidget(QWidget):
         painter.save()
         painter.setClipPath(phone_path)
 
-        # Cena com brilho ajustado por bg_brightness
+        # Fundo neutro ajustado por bg_brightness (sem orbes coloridos)
         bright = max(0.35, min(1.65, 1.0 + float(opts.bg_brightness)))
 
         def _adj(c: QColor) -> QColor:
@@ -336,66 +339,65 @@ class PhonePreviewWidget(QWidget):
                 c.alpha(),
             )
 
-        bg_grad = QLinearGradient(phone_rect.topLeft(), phone_rect.bottomRight())
-        bg_grad.setColorAt(0.0, _adj(QColor("#2d2549")))
-        bg_grad.setColorAt(0.75, _adj(QColor("#0c0b12")))
-        bg_grad.setColorAt(1.0, _adj(QColor("#070709")))
+        bg_grad = QLinearGradient(
+            phone_rect.topLeft(), phone_rect.bottomLeft()
+        )
+        bg_grad.setColorAt(0.0, _adj(QColor("#1D222D")))
+        bg_grad.setColorAt(0.5, _adj(QColor("#252B38")))
+        bg_grad.setColorAt(1.0, _adj(QColor("#14171F")))
         painter.fillRect(phone_rect, bg_grad)
 
-        # Orbe lime superior direito
-        orb_lime = QRadialGradient(
-            px + pw * 0.68, py + ph * 0.24, pw * 0.42
-        )
-        orb_lime.setColorAt(0.0, _adj(QColor(201, 255, 79, 55)))
-        orb_lime.setColorAt(1.0, QColor(201, 255, 79, 0))
-        painter.fillRect(phone_rect, orb_lime)
+        # Faixas superior/inferior representando o fundo desfocado (blur)
+        crop_h = min(ph, (pw * 9 / 16) * max(1.0, float(opts.zoom) * 0.85))
+        crop_y = py + (ph - crop_h) / 2
+        if crop_h < ph - 4:
+            blur_overlay = QColor(0, 0, 0, 75)
+            painter.fillRect(QRectF(px, py, pw, crop_y - py), blur_overlay)
+            painter.fillRect(
+                QRectF(px, crop_y + crop_h, pw, (py + ph) - (crop_y + crop_h)),
+                blur_overlay,
+            )
+            guide_pen = QPen(QColor(255, 255, 255, 22), 1, Qt.DashLine)
+            painter.setPen(guide_pen)
+            painter.drawLine(
+                QPointF(px, crop_y), QPointF(px + pw, crop_y)
+            )
+            painter.drawLine(
+                QPointF(px, crop_y + crop_h),
+                QPointF(px + pw, crop_y + crop_h),
+            )
 
-        # Orbe violeta inferior esquerdo
-        orb_violet = QRadialGradient(
-            px + pw * 0.24, py + ph * 0.76, pw * 0.55
-        )
-        orb_violet.setColorAt(0.0, _adj(QColor(139, 92, 246, 92)))
-        orb_violet.setColorAt(1.0, QColor(139, 92, 246, 0))
-        painter.fillRect(phone_rect, orb_violet)
-
-        # Silhueta escalada pelo zoom (como `.preview-figure` do site)
+        # Silhueta neutra escalada pelo zoom
         zoom_scale = max(0.75, min(1.75, float(opts.zoom) / 1.7))
-        fig_w = pw * 0.54 * zoom_scale
+        fig_w = pw * 0.50 * zoom_scale
         fig_h = fig_w * 1.15
         fig_x = px + (pw - fig_w) / 2
-        fig_y = py + ph * 0.84 - fig_h
+        fig_y = py + ph * 0.80 - fig_h
 
-        head_r = fig_w * 0.22
+        head_r = fig_w * 0.21
         head_center = QPointF(px + pw / 2, fig_y - head_r * 0.35)
-        fig_grad = QLinearGradient(fig_x, fig_y - head_r, fig_x, fig_y + fig_h)
-        fig_grad.setColorAt(0.0, QColor(255, 255, 255, 48))
-        fig_grad.setColorAt(1.0, QColor(0, 0, 0, 95))
         painter.setPen(Qt.NoPen)
-        painter.setBrush(fig_grad)
+        painter.setBrush(QColor(255, 255, 255, 34))
         painter.drawEllipse(head_center, head_r, head_r)
 
-        torso_rect = QRectF(fig_x, fig_y + head_r * 0.55, fig_w, fig_h * 0.85)
-        painter.drawRoundedRect(torso_rect, fig_w * 0.42, fig_w * 0.35)
+        torso_rect = QRectF(
+            fig_x, fig_y + head_r * 0.55, fig_w, fig_h * 0.82
+        )
+        painter.drawRoundedRect(torso_rect, fig_w * 0.38, fig_w * 0.32)
 
-        # Vinheta escura na base
-        shade = QLinearGradient(0, py + ph * 0.38, 0, py + ph)
+        # Sombra inferior suave para leitura da legenda
+        shade = QLinearGradient(0, py + ph * 0.45, 0, py + ph)
         shade.setColorAt(0.0, QColor(0, 0, 0, 0))
-        shade.setColorAt(1.0, QColor(0, 0, 0, 165))
+        shade.setColorAt(1.0, QColor(0, 0, 0, 155))
         painter.fillRect(phone_rect, shade)
-
-        # Notch no topo
-        notch_w, notch_h = 34.0, 7.0
-        notch = QRectF(px + (pw - notch_w) / 2, py + 7, notch_w, notch_h)
-        painter.setBrush(QColor("#000000"))
-        painter.drawRoundedRect(notch, 3.5, 3.5)
 
         # Legenda dinâmica
         self._draw_caption(painter, phone_rect, opts)
 
         painter.restore()
 
-        # Borda externa do aparelho
-        painter.setPen(QPen(QColor("#353541"), 1.2))
+        # Borda externa do frame 9:16
+        painter.setPen(QPen(QColor(theme.LINE_STRONG), 1.2))
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(phone_path)
 
@@ -427,15 +429,22 @@ class PhonePreviewWidget(QWidget):
         lines: list[list[tuple[int, str]]] = []
         for start in range(0, len(words), per_line):
             chunk = [
-                (start + i, w) for i, w in enumerate(words[start : start + per_line])
+                (start + i, w)
+                for i, w in enumerate(words[start : start + per_line])
             ]
             lines.append(chunk)
 
-        alpha = 1.0 if opts.captions_enabled else (0.55 if self._in_settings else 0.22)
+        alpha = (
+            1.0
+            if opts.captions_enabled
+            else (0.50 if self._in_settings else 0.22)
+        )
         text_color = QColor(opts.caption_text_color or "#FFFFFF")
         text_color.setAlphaF(alpha)
 
-        box_opacity = max(0.0, min(1.0, float(opts.caption_highlight_opacity)))
+        box_opacity = max(
+            0.0, min(1.0, float(opts.caption_highlight_opacity))
+        )
         has_box = box_opacity > 0.01
         hl_color = QColor(opts.caption_highlight_color or "#7C3AED")
         hl_color.setAlphaF(box_opacity * alpha)
@@ -449,10 +458,14 @@ class PhonePreviewWidget(QWidget):
         pad_x = max(2.5, opts.caption_box_padding * scale * 0.55)
         pad_y = max(1.5, opts.caption_box_padding * scale * 0.24)
         box_radius = max(2.0, opts.caption_corner_radius * scale * 0.26)
-        word_gap = max(2.0, fm.horizontalAdvance(" ") * float(opts.caption_word_spacing))
+        word_gap = max(
+            2.0, fm.horizontalAdvance(" ") * float(opts.caption_word_spacing)
+        )
         line_h = fm.height() + pad_y * 2 + 2
 
-        margin_pct = min(0.55, max(0.04, opts.caption_margin_bottom / max(1, opts.height)))
+        margin_pct = min(
+            0.55, max(0.04, opts.caption_margin_bottom / max(1, opts.height))
+        )
         total_h = len(lines) * line_h
         base_y = py + ph * (1.0 - margin_pct) - total_h
 
@@ -470,7 +483,6 @@ class PhonePreviewWidget(QWidget):
                     painter.drawRoundedRect(rect, box_radius, box_radius)
 
                 if getattr(opts, "caption_glow", False):
-                    # Halo suave de baixa opacidade ao redor da palavra
                     glow_pen = QColor("#FFFFFF")
                     glow_pen.setAlpha(int(36 * alpha))
                     painter.setPen(glow_pen)
@@ -490,7 +502,10 @@ class PhonePreviewWidget(QWidget):
 
                 if opts.caption_outline_width > 0:
                     painter.setPen(outline_color)
-                    d = max(0.6, min(2.5, opts.caption_outline_width * scale * 0.45))
+                    d = max(
+                        0.6,
+                        min(2.5, opts.caption_outline_width * scale * 0.45),
+                    )
                     for dx, dy in (
                         (-d, 0),
                         (d, 0),
@@ -510,7 +525,7 @@ class PhonePreviewWidget(QWidget):
 
 
 class PresetCard(QFrame):
-    """Card visual clicavel para representar um Preset Viral de legenda."""
+    """Card compacto clicável para representar um Preset Viral de legenda."""
 
     clicked = Signal(str)
 
@@ -523,8 +538,8 @@ class PresetCard(QFrame):
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 10, 12, 10)
-        layout.setSpacing(6)
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(5)
 
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
@@ -535,10 +550,9 @@ class PresetCard(QFrame):
         top.addWidget(tag_lbl, 0, Qt.AlignRight)
         layout.addLayout(top)
 
-        # Mini-amostra estilizada do preset
         sample = QLabel(preset.sample_text)
         sample.setAlignment(Qt.AlignCenter)
-        sample.setFixedHeight(32)
+        sample.setFixedHeight(28)
         s_cfg = preset.settings
         fg = s_cfg.get("caption_text_color", "#FFFFFF")
         hl = s_cfg.get("caption_highlight_color", "#7C3AED")
@@ -547,21 +561,21 @@ class PresetCard(QFrame):
 
         if s_cfg.get("caption_glow"):
             sample.setStyleSheet(
-                f"background-color: #0b0d13; color: #FFFFFF; "
-                f"font-family: '{font_family}'; font-weight: 900; font-size: 13px; "
-                "border: 1px solid rgba(255, 255, 255, 0.45); border-radius: 7px; padding: 3px 8px;"
+                f"background-color: #0F1115; color: #FFFFFF; "
+                f"font-family: '{font_family}'; font-weight: 900; font-size: 12px; "
+                "border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 5px; padding: 2px 6px;"
             )
         elif opacity > 0.05:
             sample.setStyleSheet(
                 f"background-color: {hl}; color: {fg}; "
-                f"font-family: '{font_family}'; font-weight: 800; font-size: 13px; "
-                "border-radius: 7px; padding: 3px 8px;"
+                f"font-family: '{font_family}'; font-weight: 800; font-size: 12px; "
+                "border-radius: 5px; padding: 2px 6px;"
             )
         else:
             sample.setStyleSheet(
-                f"background-color: #16181d; color: {hl}; "
-                f"font-family: '{font_family}'; font-weight: 800; font-size: 13px; "
-                "border: 1px solid rgba(255,255,255,0.08); border-radius: 7px; padding: 3px 8px;"
+                f"background-color: #12151C; color: {hl}; "
+                f"font-family: '{font_family}'; font-weight: 800; font-size: 12px; "
+                f"border: 1px solid {theme.LINE}; border-radius: 5px; padding: 2px 6px;"
             )
         layout.addWidget(sample)
 
@@ -581,18 +595,18 @@ class PresetCard(QFrame):
         if self._selected:
             self.setStyleSheet(
                 "QFrame#PresetCard { "
-                f"background-color: rgba(201, 255, 79, 0.07); "
-                f"border: 1.5px solid {theme.LIME}; "
-                "border-radius: 10px; }"
+                f"background-color: {theme.ACCENT_SOFT}; "
+                f"border: 1.5px solid {theme.ACCENT}; "
+                "border-radius: 6px; }"
             )
         else:
             self.setStyleSheet(
                 "QFrame#PresetCard { "
-                "background-color: rgba(255, 255, 255, 0.025); "
-                "border: 1px solid rgba(255, 255, 255, 0.09); "
-                "border-radius: 10px; } "
+                f"background-color: {theme.PANEL_2}; "
+                f"border: 1px solid {theme.LINE}; "
+                "border-radius: 6px; } "
                 "QFrame#PresetCard:hover { "
-                "border: 1px solid rgba(255, 255, 255, 0.24); }"
+                f"border: 1px solid {theme.LINE_STRONG}; }}"
             )
 
     def mousePressEvent(self, event):
@@ -602,19 +616,19 @@ class PresetCard(QFrame):
 
 
 class PresetGrid(QWidget):
-    """Galeria em grade de PresetCards com selecao exclusiva."""
+    """Galeria em grade de PresetCards com seleção exclusiva."""
 
     preset_selected = Signal(str)
 
-    def __init__(self, presets: dict, columns: int = 2, parent=None):
+    def __init__(self, presets: dict, columns: int = 3, parent=None):
         super().__init__(parent)
         self.cards: dict[str, PresetCard] = {}
         self._selected_id: str | None = None
 
         layout = QGridLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setHorizontalSpacing(10)
-        layout.setVerticalSpacing(10)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
 
         for idx, (preset_id, preset) in enumerate(presets.items()):
             card = PresetCard(preset, self)
@@ -636,18 +650,23 @@ class PresetGrid(QWidget):
 
 
 class CollapsibleBox(QWidget):
-    """Container tipo sanfona (Accordion) para agrupar Configuracoes Avancadas."""
+    """Container retrátil (Accordion) para agrupar configurações avançadas."""
 
     toggled = Signal(bool)
 
-    def __init__(self, title: str = "Configurações Avançadas", expanded: bool = False, parent=None):
+    def __init__(
+        self,
+        title: str = "Configurações Avançadas",
+        expanded: bool = False,
+        parent=None,
+    ):
         super().__init__(parent)
         self._title = title
         self._expanded = bool(expanded)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
+        root.setSpacing(8)
 
         self.toggle_button = QPushButton()
         self.toggle_button.setObjectName("Ghost")
@@ -658,13 +677,12 @@ class CollapsibleBox(QWidget):
         self.content_area = QWidget()
         self.content_layout = QVBoxLayout(self.content_area)
         self.content_layout.setContentsMargins(0, 4, 0, 0)
-        self.content_layout.setSpacing(12)
+        self.content_layout.setSpacing(10)
         root.addWidget(self.content_area)
 
         self._sync_ui()
 
     def set_content_layout(self, layout):
-        # Move widgets/layouts into content_layout
         self.content_layout.addLayout(layout)
 
     def add_widget(self, widget: QWidget):

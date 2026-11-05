@@ -1,7 +1,14 @@
-"""Dialogo de Projetos finalizados, exibidos em formato sanfona (accordion)."""
+"""Painel e diálogo de Projetos finalizados, exibidos em formato sanfona (accordion).
+
+Suporta uso embarcado na janela principal (`embedded=True`) e uso como
+diálogo autônomo (`ProjectsDialog(registry_path=...)`).
+"""
 
 from __future__ import annotations
 
+import subprocess
+import sys
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +20,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -20,13 +28,48 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.widgets import eyebrow, label, separator
+from gui.widgets import label, separator
 from utils.report import (
     delete_project,
     load_projects_registry,
     load_report,
     update_clip_published,
 )
+from utils.timefmt import hhmmss_to_seconds
+
+
+def reveal_in_explorer(path: str | Path) -> None:
+    """Abre a pasta onde o corte está no gerenciador de arquivos nativo do sistema."""
+    try:
+        p = Path(path).resolve()
+        folder = p.parent if p.is_file() else p
+        if not folder.exists() and p.parent.exists():
+            folder = p.parent
+        if folder.exists():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+    except Exception:
+        pass
+
+
+def open_upload_pages(path: str = "", reveal: bool = True) -> None:
+    """Abre YouTube e TikTok Studio no navegador padrão, copia o caminho do corte e abre a pasta onde o vídeo está."""
+    if path:
+        try:
+            resolved_path = Path(path).resolve()
+            if resolved_path.exists():
+                QApplication.clipboard().setText(str(resolved_path))
+                if reveal:
+                    reveal_in_explorer(resolved_path)
+            elif resolved_path.parent.exists():
+                QApplication.clipboard().setText(str(resolved_path))
+                if reveal:
+                    reveal_in_explorer(resolved_path.parent)
+        except Exception:
+            pass
+    webbrowser.open_new_tab("https://www.youtube.com/upload")
+    webbrowser.open_new_tab(
+        "https://www.tiktok.com/tiktokstudio/upload?from=webapp&tab=video"
+    )
 
 
 def _format_created_at(iso_str: str) -> str:
@@ -39,6 +82,18 @@ def _format_created_at(iso_str: str) -> str:
         return str(iso_str)
 
 
+def format_clip_interval(start: str, end: str) -> str:
+    s_txt = str(start or "—")
+    e_txt = str(end or "—")
+    try:
+        dur = int(round(hhmmss_to_seconds(e_txt) - hhmmss_to_seconds(s_txt)))
+        if dur > 0:
+            return f"{s_txt} → {e_txt} · {dur}s"
+    except Exception:
+        pass
+    return f"{s_txt} → {e_txt}"
+
+
 def update_published_button_ui(button: QPushButton, published: bool) -> None:
     is_pub = bool(published)
     button.setProperty("published", "true" if is_pub else "false")
@@ -46,7 +101,7 @@ def update_published_button_ui(button: QPushButton, published: bool) -> None:
         button.blockSignals(True)
         button.setChecked(is_pub)
         button.blockSignals(False)
-    button.setText("●  Publicado" if is_pub else "○  Marcar publicado")
+    button.setText("✓ Publicado" if is_pub else "Marcar publicado")
     button.style().unpolish(button)
     button.style().polish(button)
 
@@ -74,18 +129,18 @@ class ProjectAccordionItem(QFrame):
         self.root_layout.setContentsMargins(0, 0, 0, 0)
         self.root_layout.setSpacing(0)
 
-        # --- Botao cabecalho da sanfona
+        # --- Botão cabeçalho da sanfona
         self.header_button = QPushButton()
         self.header_button.setObjectName("ProjectHeaderBtn")
         self.header_button.setCursor(Qt.PointingHandCursor)
         self.header_button.clicked.connect(self.toggle)
         self.root_layout.addWidget(self.header_button)
 
-        # --- Area de conteudo expansivel
+        # --- Área de conteúdo expansível
         self.content_area = QWidget()
         self.content_layout = QVBoxLayout(self.content_area)
-        self.content_layout.setContentsMargins(18, 0, 18, 18)
-        self.content_layout.setSpacing(12)
+        self.content_layout.setContentsMargins(16, 0, 16, 14)
+        self.content_layout.setSpacing(10)
         self.root_layout.addWidget(self.content_area)
 
         self._build_content()
@@ -108,19 +163,21 @@ class ProjectAccordionItem(QFrame):
         clips = load_report(report_path) if report_path else []
         published_count = sum(1 for c in clips if c.get("published"))
 
-        # --- Barra de dados do projeto e acoes (Abrir pasta + Excluir projeto)
+        # --- Barra de metadados e ações do projeto
         meta_row = QHBoxLayout()
         meta_row.setSpacing(10)
 
         meta_info = QVBoxLayout()
-        meta_info.setSpacing(3)
-        created_str = _format_created_at(str(self.project.get("created_at") or ""))
+        meta_info.setSpacing(2)
+        created_str = _format_created_at(
+            str(self.project.get("created_at") or "")
+        )
         avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
         clips_count = int(self.project.get("clips_count", len(clips)) or 0)
         summary_txt = (
-            f"Finalizado em {created_str}  ·  "
+            f"Concluído em {created_str}  ·  "
             f"{clips_count} cortes  ·  "
-            f"Nota média viral: {avg_score:.1f}/10  ·  "
+            f"Nota média: {avg_score:.1f}/10  ·  "
             f"Publicados: {published_count}/{len(clips)}"
         )
         self.meta_summary_label = label(summary_txt, "FieldLabel", wrap=True)
@@ -146,11 +203,11 @@ class ProjectAccordionItem(QFrame):
         meta_holder.setLayout(meta_row)
         self.content_layout.addWidget(meta_holder)
 
-        # --- Lista de cortes com botao verde de publicado
+        # --- Lista de cortes
         self.clips_container = QWidget()
         self.clips_layout = QVBoxLayout(self.clips_container)
-        self.clips_layout.setContentsMargins(0, 4, 0, 0)
-        self.clips_layout.setSpacing(8)
+        self.clips_layout.setContentsMargins(0, 2, 0, 0)
+        self.clips_layout.setSpacing(6)
 
         if not clips:
             empty_lbl = label(
@@ -168,22 +225,36 @@ class ProjectAccordionItem(QFrame):
 
         self.content_layout.addWidget(self.clips_container)
 
-    def _build_clip_row(self, index: int, clip: dict, report_path: str) -> QWidget:
+    def _build_clip_row(
+        self, index: int, clip: dict, report_path: str
+    ) -> QWidget:
         card = QFrame()
         card.setObjectName("ProjectClipCard")
         row = QHBoxLayout(card)
-        row.setContentsMargins(14, 10, 14, 10)
+        row.setContentsMargins(12, 9, 12, 9)
         row.setSpacing(12)
 
         left = QVBoxLayout()
-        left.setSpacing(4)
+        left.setSpacing(3)
 
         kicker = QHBoxLayout()
         kicker.setSpacing(6)
+        score_val = clip.get("viral_score", "—")
+        score_lbl = label(f"{score_val}/10", "ClipScore")
+        try:
+            if float(score_val) < 8.0:
+                score_lbl.setProperty("tier", "mid")
+        except (TypeError, ValueError):
+            pass
+        kicker.addWidget(score_lbl)
         kicker.addWidget(label(str(clip.get("category") or "CORTE"), "ClipCat"))
-        kicker.addWidget(label(f"{clip.get('viral_score', '—')}/10", "ClipScore"))
         kicker.addWidget(
-            label(f"{clip.get('start', '—')} → {clip.get('end', '—')}", "ClipTime")
+            label(
+                format_clip_interval(
+                    clip.get("start", "—"), clip.get("end", "—")
+                ),
+                "ClipTime",
+            )
         )
         kicker.addStretch(1)
         left.addLayout(kicker)
@@ -194,6 +265,11 @@ class ProjectAccordionItem(QFrame):
         left.addWidget(title_lbl)
 
         file_path = str(clip.get("file") or "")
+        if file_path and not Path(file_path).is_absolute() and report_path:
+            file_path = str((Path(report_path).parent / file_path).resolve())
+        elif not file_path and report_path:
+            file_path = str(Path(report_path).parent.resolve())
+
         if file_path:
             fname = label(Path(file_path).name, "ClipPath")
             fname.setToolTip(file_path)
@@ -202,10 +278,10 @@ class ProjectAccordionItem(QFrame):
         row.addLayout(left, 1)
 
         actions = QHBoxLayout()
-        actions.setSpacing(8)
+        actions.setSpacing(6)
 
-        if file_path:
-            open_mp4 = QPushButton("Abrir MP4")
+        if file_path and Path(file_path).is_file():
+            open_mp4 = QPushButton("▶ Assistir")
             open_mp4.setObjectName("Ghost")
             open_mp4.setCursor(Qt.PointingHandCursor)
             open_mp4.clicked.connect(
@@ -219,9 +295,22 @@ class ProjectAccordionItem(QFrame):
             copy_btn.setObjectName("Ghost")
             copy_btn.setCursor(Qt.PointingHandCursor)
             copy_btn.clicked.connect(
-                lambda _=False, p=file_path: QApplication.clipboard().setText(str(p))
+                lambda _=False, p=file_path: QApplication.clipboard().setText(
+                    str(p)
+                )
             )
             actions.addWidget(copy_btn)
+
+        post_btn = QPushButton("Postar")
+        post_btn.setObjectName("Ghost")
+        post_btn.setCursor(Qt.PointingHandCursor)
+        post_btn.setToolTip(
+            "Abre YouTube e TikTok Studio no navegador, copia o caminho e abre a pasta do corte para arrastar"
+        )
+        post_btn.clicked.connect(
+            lambda _=False, p=file_path: open_upload_pages(p)
+        )
+        actions.addWidget(post_btn)
 
         pub_btn = QPushButton()
         pub_btn.setObjectName("PublishedBtn")
@@ -239,22 +328,30 @@ class ProjectAccordionItem(QFrame):
         return card
 
     def _on_toggle_published(
-        self, report_path: str, clip_index: int, published: bool, button: QPushButton
+        self,
+        report_path: str,
+        clip_index: int,
+        published: bool,
+        button: QPushButton,
     ) -> None:
         rows = update_clip_published(report_path, clip_index, published)
         update_published_button_ui(button, published)
 
         published_count = sum(1 for c in rows if c.get("published"))
-        created_str = _format_created_at(str(self.project.get("created_at") or ""))
+        created_str = _format_created_at(
+            str(self.project.get("created_at") or "")
+        )
         avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
         clips_count = int(self.project.get("clips_count", len(rows)) or 0)
         self.meta_summary_label.setText(
-            f"Finalizado em {created_str}  ·  "
+            f"Concluído em {created_str}  ·  "
             f"{clips_count} cortes  ·  "
-            f"Nota média viral: {avg_score:.1f}/10  ·  "
+            f"Nota média: {avg_score:.1f}/10  ·  "
             f"Publicados: {published_count}/{len(rows)}"
         )
-        self.clip_published_changed.emit(report_path, clip_index, bool(published))
+        self.clip_published_changed.emit(
+            report_path, clip_index, bool(published)
+        )
 
     def toggle(self) -> None:
         self.set_expanded(not self._expanded)
@@ -272,7 +369,7 @@ class ProjectAccordionItem(QFrame):
         clips_count = int(self.project.get("clips_count", 0) or 0)
         avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
         self.header_button.setText(
-            f"{arrow}   {video_name}     ·     {clips_count} cortes     ·     Nota média viral: {avg_score:.1f}/10"
+            f"{arrow}   {video_name}     ·     {clips_count} cortes     ·     Nota média: {avg_score:.1f}/10"
         )
         self.content_area.setVisible(self._expanded)
         self.setProperty("expanded", "true" if self._expanded else "false")
@@ -320,7 +417,7 @@ class ProjectAccordionItem(QFrame):
 
 
 class ProjectsDialog(QDialog):
-    """Modal listando todos os projetos finalizados do mais novo pro mais velho."""
+    """Biblioteca de projetos finalizados ordenados do mais recente ao mais antigo."""
 
     project_deleted = Signal(str)
     clip_published_changed = Signal(str, int, bool)
@@ -329,11 +426,17 @@ class ProjectsDialog(QDialog):
         self,
         parent: QWidget | None = None,
         registry_path: str | Path | None = None,
+        embedded: bool = False,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Projetos")
-        self.resize(880, 680)
-        self.setMinimumSize(700, 520)
+        self.embedded = bool(embedded)
+        if self.embedded:
+            self.setWindowFlags(Qt.Widget)
+        else:
+            self.setWindowTitle("Projetos")
+            self.resize(880, 680)
+            self.setMinimumSize(700, 520)
+
         self.registry_path = registry_path
         self.accordion_items: list[ProjectAccordionItem] = []
 
@@ -341,32 +444,43 @@ class ProjectsDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- Cabecalho seguindo o padrao de SettingsDialog
+        # --- Barra superior com filtro e contador
         head = QFrame()
         head.setObjectName("SettingsHead")
-        head_layout = QVBoxLayout(head)
-        head_layout.setContentsMargins(26, 22, 26, 18)
-        head_layout.setSpacing(6)
+        head_layout = QHBoxLayout(head)
+        head_layout.setContentsMargins(20, 14, 20, 14)
+        head_layout.setSpacing(12)
 
-        top_row = QHBoxLayout()
-        top_row.addWidget(eyebrow("Histórico local"))
-        top_row.addStretch(1)
-        self.count_pill = label("0 projetos", "MiniPill")
-        top_row.addWidget(self.count_pill)
-        head_layout.addLayout(top_row)
-
-        head_layout.addWidget(label("Projetos finalizados", "PanelTitle"))
-        sub = QLabel(
-            "Projetos ordenados do mais novo para o mais velho. "
-            "Clique em um projeto para expandir os cortes, abrir a pasta, "
-            "marcar clipes como publicados ou excluir toda a pasta."
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        titles.addWidget(label("Projetos finalizados", "PanelTitle"))
+        titles.addWidget(
+            label(
+                "Expanda um projeto para assistir aos cortes, marcar como publicado ou abrir a pasta.",
+                "Faint",
+            )
         )
-        sub.setObjectName("Faint")
-        sub.setWordWrap(True)
-        head_layout.addWidget(sub)
+        head_layout.addLayout(titles, 1)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("Filtrar por nome do vídeo...")
+        self.search_input.setClearButtonEnabled(True)
+        self.search_input.setFixedWidth(220)
+        self.search_input.textChanged.connect(self._apply_filter)
+        head_layout.addWidget(self.search_input, 0, Qt.AlignVCenter)
+
+        self.count_pill = label("0 projetos", "MiniPill")
+        head_layout.addWidget(self.count_pill, 0, Qt.AlignVCenter)
+
+        refresh_btn = QPushButton("Atualizar")
+        refresh_btn.setObjectName("Ghost")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.clicked.connect(self.refresh_projects)
+        head_layout.addWidget(refresh_btn, 0, Qt.AlignVCenter)
+
         root.addWidget(head)
 
-        # --- Corpo rolavel
+        # --- Lista rolável
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
@@ -374,31 +488,25 @@ class ProjectsDialog(QDialog):
         self.list_host = QWidget()
         self.list_host.setObjectName("Root")
         self.list_layout = QVBoxLayout(self.list_host)
-        self.list_layout.setContentsMargins(26, 22, 26, 22)
-        self.list_layout.setSpacing(12)
+        self.list_layout.setContentsMargins(20, 16, 20, 18)
+        self.list_layout.setSpacing(10)
         scroll.setWidget(self.list_host)
         root.addWidget(scroll, 1)
 
-        # --- Rodape
-        foot = QFrame()
-        foot.setObjectName("Footer")
-        foot_layout = QHBoxLayout(foot)
-        foot_layout.setContentsMargins(26, 14, 26, 14)
+        # --- Rodapé apenas quando aberto como modal independente
+        if not self.embedded:
+            foot = QFrame()
+            foot.setObjectName("Footer")
+            foot_layout = QHBoxLayout(foot)
+            foot_layout.setContentsMargins(20, 12, 20, 12)
+            foot_layout.addStretch(1)
 
-        refresh_btn = QPushButton("Atualizar lista")
-        refresh_btn.setObjectName("Ghost")
-        refresh_btn.setCursor(Qt.PointingHandCursor)
-        refresh_btn.clicked.connect(self.refresh_projects)
-
-        close_btn = QPushButton("Fechar")
-        close_btn.setObjectName("Primary")
-        close_btn.setCursor(Qt.PointingHandCursor)
-        close_btn.clicked.connect(self.accept)
-
-        foot_layout.addWidget(refresh_btn)
-        foot_layout.addStretch(1)
-        foot_layout.addWidget(close_btn)
-        root.addWidget(foot)
+            close_btn = QPushButton("Fechar")
+            close_btn.setObjectName("Primary")
+            close_btn.setCursor(Qt.PointingHandCursor)
+            close_btn.clicked.connect(self.accept)
+            foot_layout.addWidget(close_btn)
+            root.addWidget(foot)
 
         self.refresh_projects()
 
@@ -418,7 +526,7 @@ class ProjectsDialog(QDialog):
 
         if not projects:
             empty = label(
-                "Nenhum projeto finalizado ainda. Assim que você concluir um corte no pipeline, ele aparecerá aqui.",
+                "Nenhum projeto finalizado ainda. Assim que você concluir um processamento, ele aparecerá aqui.",
                 "ResultsEmpty",
                 wrap=True,
             )
@@ -440,6 +548,14 @@ class ProjectsDialog(QDialog):
             self.list_layout.addWidget(item)
 
         self.list_layout.addStretch(1)
+        if hasattr(self, "search_input") and self.search_input.text().strip():
+            self._apply_filter(self.search_input.text())
+
+    def _apply_filter(self, query: str) -> None:
+        q = query.strip().lower()
+        for item in self.accordion_items:
+            name = str(item.project.get("video_name") or "").lower()
+            item.setVisible(not q or q in name)
 
     def _on_project_deleted(self, project_dir: str) -> None:
         self.project_deleted.emit(project_dir)
