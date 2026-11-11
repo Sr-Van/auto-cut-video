@@ -10,41 +10,41 @@ from pathlib import Path
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
-# --- Superfícies (Grafite Neutro) ---
-BG = "#0F1115"
-BG_2 = "#13161C"
-PANEL = "#161920"
-PANEL_2 = "#1C2029"
-PANEL_3 = "#242936"
+# --- Superfícies (Preto Serpente, neutro sem tom azulado) ---
+BG = "#121212"       # Preto Serpente
+BG_2 = "#161616"
+PANEL = "#1A1A1A"
+PANEL_2 = "#212121"
+PANEL_3 = "#2B2B2B"
 
 # --- Tipografia ---
-TEXT = "#F3F4F6"
-MUTED = "#9CA3AF"
-FAINT = "#8B94A7"  # >= 4.5:1 sobre os paineis (WCAG AA)
+TEXT = "#F5F5F4"
+MUTED = "#A8A29E"
+FAINT = "#8F8A84"  # >= 4.5:1 sobre os paineis (WCAG AA)
 
 # --- Ação e Semântica Direta ---
-ACCENT = "#2563EB"
-ACCENT_HOVER = "#1D4ED8"
-ACCENT_SOFT = "rgba(37, 99, 235, 0.14)"
-# Azul para TEXTO sobre fundo escuro (ACCENT puro falha AA em texto).
-ACCENT_TEXT = "#60A5FA"
-SUCCESS = "#10B981"
-SUCCESS_SOFT = "rgba(16, 185, 129, 0.14)"
-WARNING = "#F59E0B"
-WARNING_SOFT = "rgba(245, 158, 11, 0.14)"
+ACCENT = "#F5C400"        # Amarelo Cobra: acao principal, selecao, destaque
+ACCENT_HOVER = "#D9A21B"  # Ouro Escamado: hover, detalhes, icones
+ACCENT_SOFT = "rgba(245, 196, 0, 0.12)"
+ACCENT_TEXT = "#F5C400"   # amarelo sobre preto ja passa AA para texto
+ON_ACCENT = "#121212"     # texto sobre amarelo (branco falharia contraste)
+SUCCESS = "#22C55E"
+SUCCESS_SOFT = "rgba(34, 197, 94, 0.14)"
+WARNING = "#D9A21B"
+WARNING_SOFT = "rgba(217, 162, 27, 0.14)"
 DANGER = "#EF4444"
 DANGER_SOFT = "rgba(239, 68, 68, 0.12)"
 
 # --- Bordas ---
-LINE = "#232834"
-LINE_STRONG = "#32394A"
-LINE_ACCENT = "rgba(37, 99, 235, 0.45)"
+LINE = "#262626"
+LINE_STRONG = "#383838"
+LINE_ACCENT = "rgba(245, 196, 0, 0.45)"
 
 # Aliases de compatibilidade com módulos existentes
 LIME = ACCENT
 LIME_DEEP = ACCENT_HOVER
 VIOLET = ACCENT
-VIOLET_SOFT = "#60A5FA"
+VIOLET_SOFT = ACCENT_HOVER
 CORAL = DANGER
 LINE_LIME = LINE_ACCENT
 
@@ -90,7 +90,7 @@ QToolTip {{
 #BrandMark {{
     background: {ACCENT};
     border-radius: 6px;
-    color: #FFFFFF;
+    color: {ON_ACCENT};
     font-weight: 700;
     font-size: 12px;
 }}
@@ -104,7 +104,6 @@ QToolTip {{
     border: 1px solid {LINE_STRONG};
     border-radius: 4px;
     color: {MUTED};
-    font-family: "{mono}";
     font-size: 10px;
     font-weight: 600;
     padding: 1px 6px;
@@ -129,14 +128,13 @@ QPushButton#NavTab:hover:!checked {{
 }}
 QPushButton#NavTab:checked {{
     background: {ACCENT};
-    color: #FFFFFF;
+    color: {ON_ACCENT};
 }}
 #StatusPill {{
     background: {PANEL};
     border: 1px solid {LINE_STRONG};
     border-radius: 5px;
     color: {MUTED};
-    font-family: "{mono}";
     font-size: 11px;
     padding: 4px 10px;
 }}
@@ -159,10 +157,9 @@ QPushButton#NavTab:checked {{
 /* ---------- Tipografia e Textos ---------- */
 #Eyebrow {{
     color: {FAINT};
-    font-family: "{mono}";
     font-size: 10px;
     font-weight: 600;
-    letter-spacing: 0.8px;
+    letter-spacing: 0.1px;
 }}
 #Title {{
     font-size: 18px;
@@ -200,7 +197,6 @@ QPushButton#NavTab:checked {{
 }}
 #FieldHint {{
     color: {FAINT};
-    font-family: "{mono}";
     font-size: 11px;
 }}
 
@@ -214,7 +210,7 @@ QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{
     font-size: 12px;
     color: {TEXT};
     selection-background-color: {ACCENT};
-    selection-color: #FFFFFF;
+    selection-color: {ON_ACCENT};
 }}
 QLineEdit#MonoInput {{
     font-family: "{mono}";
@@ -280,7 +276,7 @@ QComboBox QAbstractItemView {{
     background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
     selection-background-color: {ACCENT};
-    selection-color: #FFFFFF;
+    selection-color: {ON_ACCENT};
     outline: none;
     padding: 4px;
 }}
@@ -306,7 +302,7 @@ QPushButton:disabled {{
 }}
 QPushButton#Primary {{
     background: {ACCENT};
-    color: #FFFFFF;
+    color: {ON_ACCENT};
     border: 1px solid {ACCENT};
     border-radius: 6px;
     font-weight: 600;
@@ -322,21 +318,21 @@ QPushButton#Primary:disabled {{
 }}
 QPushButton#ProcessButton {{
     background: {ACCENT};
-    color: #FFFFFF;
+    color: {ON_ACCENT};
     border: 1px solid {ACCENT};
-    border-radius: 6px;
-    padding: 10px 16px;
-    font-size: 13px;
-    font-weight: 600;
+    border-radius: 8px;
+    padding: 14px 18px;
+    font-size: 15px;
+    font-weight: 800;
 }}
 QPushButton#ProcessButton:hover {{
     background: {ACCENT_HOVER};
     border-color: {ACCENT_HOVER};
 }}
 QPushButton#ProcessButton:disabled {{
-    background: {PANEL_2};
-    border-color: {LINE};
-    color: {FAINT};
+    background: {ACCENT_SOFT};
+    border: 1px dashed {LINE_ACCENT};
+    color: {MUTED};
 }}
 QPushButton#Ghost {{
     background: {PANEL_2};
@@ -462,7 +458,6 @@ QProgressBar::chunk {{
 }}
 #StageLabel {{
     color: {TEXT};
-    font-family: "{mono}";
     font-size: 11px;
     font-weight: 600;
 }}
@@ -528,7 +523,7 @@ QPlainTextEdit#Log {{
     font-family: "{mono}";
     font-size: 11px;
     selection-background-color: {ACCENT};
-    selection-color: #FFFFFF;
+    selection-color: {ON_ACCENT};
 }}
 
 /* ---------- Resumo e Auxiliares ---------- */
@@ -538,7 +533,6 @@ QPlainTextEdit#Log {{
 }}
 #SummaryValue {{
     color: {TEXT};
-    font-family: "{mono}";
     font-size: 11px;
 }}
 #Separator {{
@@ -551,7 +545,6 @@ QPlainTextEdit#Log {{
     border: 1px solid {LINE_STRONG};
     border-radius: 4px;
     color: {MUTED};
-    font-family: "{mono}";
     font-size: 10px;
     padding: 2px 7px;
 }}
@@ -579,7 +572,6 @@ QPlainTextEdit#Log {{
     border: 1px solid {LINE_STRONG};
     border-radius: 6px;
     color: {TEXT};
-    font-family: "{mono}";
     font-size: 11px;
     font-weight: 600;
 }}
@@ -592,7 +584,6 @@ QPlainTextEdit#Log {{
     border: 1px solid {LINE_STRONG};
     border-radius: 4px;
     color: {MUTED};
-    font-family: "{mono}";
     font-size: 10px;
     font-weight: 600;
     padding: 2px 6px;
@@ -602,7 +593,6 @@ QPlainTextEdit#Log {{
     color: {SUCCESS};
     border: 1px solid rgba(16, 185, 129, 0.35);
     border-radius: 4px;
-    font-family: "{mono}";
     font-weight: 700;
     font-size: 11px;
     padding: 2px 6px;
@@ -709,7 +699,6 @@ QPushButton#ProjectHeaderBtn {{
 }}
 #ProjectHeaderMeta {{
     color: {MUTED};
-    font-family: "{mono}";
     font-size: 11px;
 }}
 QPushButton#ProjectHeaderBtn:hover {{
@@ -733,7 +722,6 @@ QPushButton#ProjectHeaderBtn:hover {{
 }}
 #SectionTitle {{
     color: {FAINT};
-    font-family: "{mono}";
     font-size: 10px;
     font-weight: 600;
     letter-spacing: 0.8px;
@@ -811,7 +799,7 @@ def apply_theme(app: QApplication):
     palette.setColor(QPalette.Button, QColor(PANEL_2))
     palette.setColor(QPalette.ButtonText, QColor(TEXT))
     palette.setColor(QPalette.Highlight, QColor(ACCENT))
-    palette.setColor(QPalette.HighlightedText, QColor("#FFFFFF"))
+    palette.setColor(QPalette.HighlightedText, QColor(ON_ACCENT))
     palette.setColor(QPalette.PlaceholderText, QColor(FAINT))
     palette.setColor(QPalette.ToolTipBase, QColor(PANEL_3))
     palette.setColor(QPalette.ToolTipText, QColor(TEXT))
