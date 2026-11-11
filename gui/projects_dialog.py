@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.widgets import label, separator
+from gui.widgets import ElidedLabel, flash_button, label, separator
 from utils.report import (
     delete_project,
     load_projects_registry,
@@ -134,6 +134,19 @@ class ProjectAccordionItem(QFrame):
         self.header_button.setObjectName("ProjectHeaderBtn")
         self.header_button.setCursor(Qt.PointingHandCursor)
         self.header_button.clicked.connect(self.toggle)
+        self.header_button.setMinimumHeight(44)
+        # Titulo elidido + metadados fixos: titulos longos nao empurram o layout.
+        header_row = QHBoxLayout(self.header_button)
+        header_row.setContentsMargins(16, 0, 16, 0)
+        header_row.setSpacing(12)
+        self.header_arrow = label("▸", "ProjectHeaderArrow")
+        self.header_title = ElidedLabel("", "ProjectHeaderTitle")
+        self.header_meta = label("", "ProjectHeaderMeta")
+        for w in (self.header_arrow, self.header_title, self.header_meta):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)
+        header_row.addWidget(self.header_arrow)
+        header_row.addWidget(self.header_title, 1)
+        header_row.addWidget(self.header_meta)
         self.root_layout.addWidget(self.header_button)
 
         # --- Área de conteúdo expansível
@@ -230,9 +243,9 @@ class ProjectAccordionItem(QFrame):
     ) -> QWidget:
         card = QFrame()
         card.setObjectName("ProjectClipCard")
-        row = QHBoxLayout(card)
+        row = QVBoxLayout(card)
         row.setContentsMargins(12, 9, 12, 9)
-        row.setSpacing(12)
+        row.setSpacing(8)
 
         left = QVBoxLayout()
         left.setSpacing(3)
@@ -264,18 +277,33 @@ class ProjectAccordionItem(QFrame):
         )
         left.addWidget(title_lbl)
 
+        hook_text = clip.get("hook_text")
+        if hook_text:
+            left.addWidget(label(f"“{hook_text}”", "ClipHook", wrap=True))
+        analysis = clip.get("analysis") or clip.get("justification")
+        if analysis:
+            left.addWidget(label(str(analysis), "ClipAnalysis", wrap=True))
+
         file_path = str(clip.get("file") or "")
         if file_path and not Path(file_path).is_absolute() and report_path:
             file_path = str((Path(report_path).parent / file_path).resolve())
         elif not file_path and report_path:
             file_path = str(Path(report_path).parent.resolve())
 
+        file_exists = bool(file_path) and Path(file_path).is_file()
         if file_path:
-            fname = label(Path(file_path).name, "ClipPath")
+            fname = ElidedLabel(Path(file_path).name, "ClipPath")
             fname.setToolTip(file_path)
             left.addWidget(fname)
+            if not file_exists and Path(file_path).suffix:
+                left.addWidget(
+                    label(
+                        "Arquivo MP4 não encontrado (movido ou excluído).",
+                        "FieldHint",
+                    )
+                )
 
-        row.addLayout(left, 1)
+        row.addLayout(left)
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
@@ -295,8 +323,9 @@ class ProjectAccordionItem(QFrame):
             copy_btn.setObjectName("Ghost")
             copy_btn.setCursor(Qt.PointingHandCursor)
             copy_btn.clicked.connect(
-                lambda _=False, p=file_path: QApplication.clipboard().setText(
-                    str(p)
+                lambda _=False, p=file_path, b=copy_btn: (
+                    QApplication.clipboard().setText(str(p)),
+                    flash_button(b, "✓ Copiado"),
                 )
             )
             actions.addWidget(copy_btn)
@@ -323,6 +352,7 @@ class ProjectAccordionItem(QFrame):
             )
         )
         actions.addWidget(pub_btn)
+        actions.addStretch(1)
 
         row.addLayout(actions)
         return card
@@ -368,8 +398,10 @@ class ProjectAccordionItem(QFrame):
         video_name = str(self.project.get("video_name") or "Projeto sem nome")
         clips_count = int(self.project.get("clips_count", 0) or 0)
         avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
-        self.header_button.setText(
-            f"{arrow}   {video_name}     ·     {clips_count} cortes     ·     Nota média: {avg_score:.1f}/10"
+        self.header_arrow.setText(arrow)
+        self.header_title.setText(video_name)
+        self.header_meta.setText(
+            f"{clips_count} cortes  ·  Nota média {avg_score:.1f}/10"
         )
         self.content_area.setVisible(self._expanded)
         self.setProperty("expanded", "true" if self._expanded else "false")
