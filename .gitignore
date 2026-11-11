@@ -16,3 +16,6 @@ venv/
 env/
 /site
 _plano*.md
+
+# Dados locais/pessoais (relatorios de critica com caminhos absolutos)
+.impeccable/critique/
