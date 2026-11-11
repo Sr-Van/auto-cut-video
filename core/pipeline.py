@@ -157,6 +157,8 @@ def run(
         )
 
         check_cancelled(cancel_event)
+        for clip in clips:
+            clip.setdefault("layout", options.layout_id)
         _emit(progress_callback, "relatorio", 95, "Gerando relatorio...")
         report_path = save_report(clips, out_dir, clip_paths)
         project_entry = register_project(

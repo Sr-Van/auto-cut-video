@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QFileDialog,
     QMessageBox,
     QScrollArea,
     QSpinBox,
@@ -37,7 +38,9 @@ from core.captions import (
 )
 from core.options import ProcessingOptions
 from gui import theme
+from core.layouts import LAYOUTS, get_layout
 from gui.widgets import (
+    LayoutGrid,
     CollapsibleBox,
     PhonePreviewWidget,
     PresetGrid,
@@ -177,7 +180,8 @@ class SettingsDialog(QDialog):
             root.addWidget(head)
 
         # --- Sub-abas (Vídeo | Legenda | Cortes & IA)
-        self.tabs = UnderlineTabs(["Vídeo", "Legenda", "Cortes & IA"])
+        self._layout_id = options.layout_id
+        self.tabs = UnderlineTabs(["Vídeo", "Legenda", "Cortes & IA", "Formato"])
         root.addWidget(self.tabs)
 
         # --- Corpo rolável
@@ -186,6 +190,7 @@ class SettingsDialog(QDialog):
         # A aba Legenda tem rolagem propria: a previa 9:16 fica fixa ao lado.
         self.stack.addWidget(self._build_caption_tab())
         self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))
+        self.stack.addWidget(self._build_format_tab())
         self.tabs.changed.connect(self.stack.setCurrentIndex)
         root.addWidget(self.stack, 1)
 
@@ -519,6 +524,179 @@ class SettingsDialog(QDialog):
 
         return pane
 
+    def _build_format_tab(self) -> QWidget:
+        """Formato do short (pre-definido) + itens auxiliares condicionais."""
+        pane = QWidget()
+        pane.setObjectName("Root")
+        outer = QHBoxLayout(pane)
+        outer.setContentsMargins(20, 18, 8, 18)
+        outer.setSpacing(20)
+
+        holder = QWidget()
+        holder.setObjectName("Root")
+        col = QVBoxLayout(holder)
+        col.setContentsMargins(0, 0, 8, 0)
+        col.setSpacing(12)
+
+        col.addWidget(label("FORMATO DO SHORT", "SectionTitle"))
+        col.addWidget(
+            label(
+                "Escolha uma vez: todos os próximos cortes saem neste formato.",
+                "FieldHint",
+                wrap=True,
+            )
+        )
+        self.layout_grid = LayoutGrid(LAYOUTS, columns=2)
+        self.layout_grid.layout_selected.connect(self._on_layout_selected)
+        col.addWidget(self.layout_grid)
+
+        col.addWidget(label("ITENS AUXILIARES", "SectionTitle"))
+
+        # --- Texto da faixa (so formatos com texto)
+        self.text_box = QWidget()
+        tgrid = QGridLayout(self.text_box)
+        tgrid.setContentsMargins(0, 0, 0, 0)
+        tgrid.setHorizontalSpacing(14)
+        tgrid.setVerticalSpacing(10)
+        self.layout_text_source = QComboBox()
+        self.layout_text_source.addItem("Gancho gerado pela IA", "hook")
+        self.layout_text_source.addItem("Título do corte", "title")
+        self.layout_text_source.addItem("Texto fixo", "custom")
+        tgrid.addWidget(_field_box("Texto da faixa", self.layout_text_source), 0, 0)
+        self.layout_custom_text = QLineEdit()
+        self.layout_custom_text.setPlaceholderText("Ex.: SIGA PARA MAIS CORTES")
+        tgrid.addWidget(_field_box("Texto fixo", self.layout_custom_text), 0, 1)
+        self.layout_band_color = ColorButton("#D90A0A")
+        tgrid.addWidget(_field_box("Cor da faixa", self.layout_band_color), 1, 0)
+        self.layout_text_color = ColorButton("#FFFFFF")
+        tgrid.addWidget(_field_box("Cor do texto", self.layout_text_color), 1, 1)
+        self.layout_text_font = QComboBox()
+        self.layout_text_font.setMaxVisibleItems(16)
+        self._populate_font_combo(self.layout_text_font)
+        tgrid.addWidget(_field_box("Fonte da faixa", self.layout_text_font), 2, 0)
+        switches = QVBoxLayout()
+        switches.setSpacing(6)
+        self.layout_text_uppercase = Switch("Maiúsculas")
+        self.layout_band_border = Switch("Linhas em cima e embaixo")
+        switches.addWidget(self.layout_text_uppercase)
+        switches.addWidget(self.layout_band_border)
+        tgrid.addLayout(switches, 2, 1)
+        col.addWidget(self.text_box)
+
+        # --- Imagem auxiliar (so formatos que exigem)
+        self.image_box = QWidget()
+        irow = QHBoxLayout(self.image_box)
+        irow.setContentsMargins(0, 0, 0, 0)
+        irow.setSpacing(6)
+        self.aux_image_path = QLineEdit()
+        self.aux_image_path.setReadOnly(True)
+        self.aux_image_path.setObjectName("MonoInput")
+        self.aux_image_path.setPlaceholderText("Nenhuma imagem escolhida")
+        pick_img = QPushButton("Escolher...")
+        pick_img.setObjectName("Ghost")
+        pick_img.clicked.connect(self._choose_aux_image)
+        clear_img = QPushButton("✕")
+        clear_img.setObjectName("IconBtn")
+        clear_img.setToolTip("Remover imagem")
+        clear_img.clicked.connect(lambda: self._set_aux_path(self.aux_image_path, ""))
+        irow.addWidget(self.aux_image_path, 1)
+        irow.addWidget(pick_img)
+        irow.addWidget(clear_img)
+        self.image_field = _field_box("Imagem auxiliar", self.image_box, "PNG ou JPG")
+        col.addWidget(self.image_field)
+
+        # --- Musica de fundo (qualquer formato)
+        audio_holder = QWidget()
+        arow = QHBoxLayout(audio_holder)
+        arow.setContentsMargins(0, 0, 0, 0)
+        arow.setSpacing(6)
+        self.aux_audio_path = QLineEdit()
+        self.aux_audio_path.setReadOnly(True)
+        self.aux_audio_path.setObjectName("MonoInput")
+        self.aux_audio_path.setPlaceholderText("Sem música")
+        pick_audio = QPushButton("Escolher...")
+        pick_audio.setObjectName("Ghost")
+        pick_audio.clicked.connect(self._choose_aux_audio)
+        clear_audio = QPushButton("✕")
+        clear_audio.setObjectName("IconBtn")
+        clear_audio.setToolTip("Remover música")
+        clear_audio.clicked.connect(lambda: self._set_aux_path(self.aux_audio_path, ""))
+        self.aux_audio_volume = QSpinBox()
+        self.aux_audio_volume.setRange(0, 100)
+        self.aux_audio_volume.setSuffix(" %")
+        self.aux_audio_volume.setToolTip("Volume da música; ela abaixa sozinha quando alguém fala")
+        arow.addWidget(self.aux_audio_path, 1)
+        arow.addWidget(pick_audio)
+        arow.addWidget(clear_audio)
+        arow.addWidget(self.aux_audio_volume)
+        col.addWidget(
+            _field_box("Música de fundo (opcional)", audio_holder, "abaixa quando há voz")
+        )
+        col.addStretch(1)
+
+        scroll = self._wrap_scroll(holder)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(scroll, 1)
+
+        preview_box = QFrame()
+        preview_box.setObjectName("SettingsPreviewBox")
+        pv = QVBoxLayout(preview_box)
+        pv.setContentsMargins(12, 12, 12, 12)
+        pv.setSpacing(8)
+        pv.addWidget(label("PRÉVIA 9:16", "SectionTitle"))
+        self.format_preview = PhonePreviewWidget(phone_width=156, in_settings=True)
+        pv.addWidget(self.format_preview, 0, Qt.AlignHCenter)
+        outer.addWidget(preview_box, 0, Qt.AlignTop)
+
+        self.layout_text_source.currentIndexChanged.connect(self._sync_layout_fields)
+        self.layout_text_source.currentIndexChanged.connect(self._refresh_preview)
+        self.layout_custom_text.textChanged.connect(self._refresh_preview)
+        self.layout_band_color.changed.connect(self._refresh_preview)
+        self.layout_text_color.changed.connect(self._refresh_preview)
+        self.layout_text_font.currentIndexChanged.connect(self._refresh_preview)
+        self.layout_text_uppercase.toggled.connect(self._refresh_preview)
+        self.layout_band_border.toggled.connect(self._refresh_preview)
+        self.aux_audio_volume.valueChanged.connect(self._refresh_preview)
+        return pane
+
+    def _on_layout_selected(self, layout_id: str):
+        self._layout_id = layout_id
+        self._sync_layout_fields()
+        self._refresh_preview()
+
+    def _sync_layout_fields(self, *_args):
+        layout = get_layout(self._layout_id)
+        self.layout_grid.select_layout(layout.id)
+        self.text_box.setVisible(layout.has_text)
+        self.image_field.setVisible(layout.has_image)
+        self.layout_custom_text.setEnabled(
+            self.layout_text_source.currentData() == "custom"
+        )
+
+    def _set_aux_path(self, field: QLineEdit, path: str):
+        field.setText(path)
+        field.setToolTip(path)
+        self._refresh_preview()
+
+    def _choose_aux_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Escolher imagem", "", "Imagens (*.png *.jpg *.jpeg *.webp)"
+        )
+        if path:
+            self._set_aux_path(self.aux_image_path, path)
+
+    def _choose_aux_audio(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Escolher música", "", "Áudio (*.mp3 *.wav *.m4a *.ogg *.aac *.flac)"
+        )
+        if path:
+            self._set_aux_path(self.aux_audio_path, path)
+
+    def set_preview_frame(self, image):
+        for widget in (getattr(self, "preview_widget", None), getattr(self, "format_preview", None)):
+            if widget is not None:
+                widget.set_frame(image)
+
     def _build_cuts_tab(self) -> QWidget:
         pane = QWidget()
         pane.setObjectName("Root")
@@ -646,7 +824,8 @@ class SettingsDialog(QDialog):
         ):
             self.min_clip_duration.setValue(value)
 
-    def _populate_font_combo(self):
+    def _populate_font_combo(self, combo=None):
+        combo = combo if combo is not None else self.caption_font
         qt_families = [
             f.strip()
             for f in QFontDatabase.families()
@@ -675,13 +854,13 @@ class SettingsDialog(QDialog):
                 seen.add(key)
                 system_fonts.append(name)
 
-        self.caption_font.clear()
+        combo.clear()
         for name in preconfigured or list(PRECONFIGURED_FONTS):
-            self.caption_font.addItem(name, name)
+            combo.addItem(name, name)
         if system_fonts:
-            self.caption_font.insertSeparator(self.caption_font.count())
+            combo.insertSeparator(combo.count())
             for name in system_fonts:
-                self.caption_font.addItem(name, name)
+                combo.addItem(name, name)
 
     def _connect_live_preview(self):
         for spin in (
@@ -740,6 +919,8 @@ class SettingsDialog(QDialog):
         draft = self._draft_options()
         if hasattr(self, "preview_widget"):
             self.preview_widget.set_options(draft)
+        if hasattr(self, "format_preview"):
+            self.format_preview.set_options(draft)
         self._update_preset_status(draft)
         if self.embedded and emit_change:
             self._apply()
@@ -843,6 +1024,24 @@ class SettingsDialog(QDialog):
 
             self._load_caption_fields(options)
 
+            self._layout_id = options.layout_id
+            idx = self.layout_text_source.findData(options.layout_text_source)
+            self.layout_text_source.setCurrentIndex(max(0, idx))
+            self.layout_custom_text.setText(options.layout_custom_text)
+            self.layout_band_color.set_color(options.layout_band_color)
+            self.layout_text_color.set_color(options.layout_text_color)
+            fidx = self.layout_text_font.findData(options.layout_text_font)
+            if fidx < 0:
+                self.layout_text_font.addItem(options.layout_text_font, options.layout_text_font)
+                fidx = self.layout_text_font.count() - 1
+            self.layout_text_font.setCurrentIndex(fidx)
+            self.layout_text_uppercase.setChecked(options.layout_text_uppercase)
+            self.layout_band_border.setChecked(options.layout_band_border)
+            self.aux_image_path.setText(options.aux_image_path)
+            self.aux_audio_path.setText(options.aux_audio_path)
+            self.aux_audio_volume.setValue(int(round(options.aux_audio_volume * 100)))
+            self._sync_layout_fields()
+
             self.max_clips.setValue(options.max_clips)
             self.min_viral_score.setValue(options.min_viral_score)
             self.min_clip_duration.setValue(options.min_clip_duration)
@@ -919,6 +1118,17 @@ class SettingsDialog(QDialog):
             or self.caption_animation.currentText()
             or "pop"
         )
+        options.layout_id = self._layout_id
+        options.layout_text_source = self.layout_text_source.currentData() or "hook"
+        options.layout_custom_text = self.layout_custom_text.text().strip()
+        options.layout_band_color = self.layout_band_color.color()
+        options.layout_text_color = self.layout_text_color.color()
+        options.layout_text_font = self.layout_text_font.currentData() or "Impact"
+        options.layout_text_uppercase = self.layout_text_uppercase.isChecked()
+        options.layout_band_border = self.layout_band_border.isChecked()
+        options.aux_image_path = self.aux_image_path.text().strip()
+        options.aux_audio_path = self.aux_audio_path.text().strip()
+        options.aux_audio_volume = self.aux_audio_volume.value() / 100.0
         options.max_clips = self.max_clips.value()
         options.min_viral_score = self.min_viral_score.value()
         options.min_clip_duration = self.min_clip_duration.value()

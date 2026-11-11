@@ -471,6 +471,18 @@ class PhonePreviewWidget(QWidget):
                 c.alpha(),
             )
 
+        from core.layouts import get_layout
+
+        layout = get_layout(getattr(opts, "layout_id", "center"))
+        if not layout.legacy:
+            self._paint_layout(painter, phone_rect, opts, layout)
+            self._draw_caption(painter, phone_rect, opts)
+            painter.restore()
+            painter.setPen(QPen(QColor(theme.LINE_STRONG), 1.2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(phone_path)
+            return
+
         if self._frame is not None:
             self._paint_frame(painter, phone_rect, opts)
             shade = QLinearGradient(0, py + ph * 0.45, 0, py + ph)
@@ -546,9 +558,133 @@ class PhonePreviewWidget(QWidget):
         painter.setBrush(Qt.NoBrush)
         painter.drawPath(phone_path)
 
+    # ---------------------------------------------------- formatos por slot
+    def _aux_image(self, path: str):
+        if not path:
+            return None
+        cached = self._frame_cache.get(("aux", path))
+        if cached is None:
+            img = QImage(path)
+            cached = img if not img.isNull() else False
+            self._frame_cache[("aux", path)] = cached
+        return cached or None
+
+    @staticmethod
+    def _draw_cover(painter: QPainter, rect: QRectF, image: QImage, anchor_y: float = 0.5):
+        if image is None or image.isNull():
+            return
+        scale = max(rect.width() / image.width(), rect.height() / image.height())
+        sw, sh = rect.width() / scale, rect.height() / scale
+        sx = (image.width() - sw) / 2
+        sy = max(0.0, min(image.height() - sh, image.height() * anchor_y - sh / 2))
+        painter.drawImage(rect, image, QRectF(sx, sy, sw, sh))
+
+    def _draw_placeholder(self, painter: QPainter, rect: QRectF, label_text: str = ""):
+        grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+        grad.setColorAt(0.0, QColor("#2A2A2A"))
+        grad.setColorAt(1.0, QColor("#1A1A1A"))
+        painter.fillRect(rect, grad)
+        r = min(rect.width(), rect.height()) * 0.16
+        cx, cy = rect.center().x(), rect.center().y()
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 34))
+        painter.drawEllipse(QPointF(cx, cy - r * 0.6), r, r)
+        painter.drawRoundedRect(QRectF(cx - r * 1.6, cy + r * 0.6, r * 3.2, r * 2.0), r, r)
+        if label_text:
+            font = QFont()
+            font.setPixelSize(max(8, int(rect.height() * 0.09)))
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor(255, 255, 255, 120))
+            painter.drawText(rect.adjusted(4, 4, -4, -4), Qt.AlignTop | Qt.AlignLeft, label_text)
+
+    def _paint_layout(self, painter: QPainter, rect: QRectF, opts, layout) -> None:
+        total = sum(s.height for s in layout.slots) or 1.0
+        y = rect.top()
+        frame = self._frame
+        for slot in layout.slots:
+            h = rect.height() * slot.height / total
+            area = QRectF(rect.left(), y, rect.width(), h)
+            painter.save()
+            painter.setClipRect(area)
+            if slot.kind in ("video", "content"):
+                if frame is not None:
+                    # fundo desfocado barato + video inteiro (contain * zoom)
+                    small = frame.scaled(24, 14, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+                    self._draw_cover(painter, area, small)
+                    painter.fillRect(area, QColor(0, 0, 0, 60))
+                    if getattr(slot, "fit", "contain") == "cover":
+                        self._draw_cover(painter, area, frame)
+                        painter.restore()
+                        y += h
+                        continue
+                    z = max(0.2, float(slot.zoom))
+                    fw = area.width() * z
+                    fh = fw * frame.height() / max(1, frame.width())
+                    if fh > area.height() * z:
+                        fh = area.height() * z
+                        fw = fh * frame.width() / max(1, frame.height())
+                    painter.drawImage(
+                        QRectF(area.center().x() - fw / 2, area.center().y() - fh / 2, fw, fh),
+                        frame,
+                    )
+                else:
+                    self._draw_placeholder(painter, area, "VÍDEO")
+            elif slot.kind in ("focus", "cam"):
+                if frame is not None:
+                    self._draw_cover(painter, area, frame, 0.42)
+                else:
+                    self._draw_placeholder(painter, area, "ROSTO" if slot.kind == "focus" else "WEBCAM")
+            elif slot.kind == "image":
+                img = self._aux_image(getattr(opts, "aux_image_path", ""))
+                if img is not None:
+                    self._draw_cover(painter, area, img)
+                else:
+                    painter.fillRect(area, QColor("#1A1A1A"))
+                    pen = QPen(QColor(theme.ACCENT), 1.2, Qt.DashLine)
+                    painter.setPen(pen)
+                    painter.setBrush(Qt.NoBrush)
+                    painter.drawRect(area.adjusted(4, 4, -4, -4))
+                    font = QFont()
+                    font.setPixelSize(max(8, int(area.height() * 0.12)))
+                    font.setBold(True)
+                    painter.setFont(font)
+                    painter.setPen(QColor(theme.ACCENT))
+                    painter.drawText(area, Qt.AlignCenter, "+ Imagem")
+            else:  # text
+                painter.fillRect(area, QColor(getattr(opts, "layout_band_color", "#D90A0A")))
+                text_color = QColor(getattr(opts, "layout_text_color", "#FFFFFF"))
+                if getattr(opts, "layout_band_border", False):
+                    t = max(1.0, area.height() * 0.03)
+                    painter.fillRect(QRectF(area.left(), area.top(), area.width(), t), text_color)
+                    painter.fillRect(
+                        QRectF(area.left(), area.bottom() - t, area.width(), t), text_color
+                    )
+                font = QFont(getattr(opts, "layout_text_font", "") or opts.caption_font or "Arial")
+                font.setPixelSize(max(7, int(area.height() * 0.24)))
+                font.setBold(True)
+                painter.setFont(font)
+                painter.setPen(text_color)
+                sample = (
+                    getattr(opts, "layout_custom_text", "")
+                    if getattr(opts, "layout_text_source", "hook") == "custom"
+                    else ""
+                ) or "O gancho do corte aparece aqui"
+                if getattr(opts, "layout_text_uppercase", False):
+                    sample = sample.upper()
+                painter.drawText(
+                    area.adjusted(6, 2, -6, -2), Qt.AlignCenter | Qt.TextWordWrap, sample
+                )
+            painter.restore()
+            y += h
+
     def _draw_caption(
         self, painter: QPainter, phone_rect: QRectF, opts: ProcessingOptions
     ):
+        from core.layouts import caption_options
+
+        # mesma regra do render: o formato decide tamanho e posicao
+        opts = caption_options(opts)
         px, py, pw, ph = (
             phone_rect.x(),
             phone_rect.y(),
@@ -808,6 +944,151 @@ class PresetGrid(QWidget):
 
     def selected_preset(self) -> str | None:
         return self._selected_id
+
+
+class LayoutSchematic(QWidget):
+    """Miniatura esquematica dos slots de um formato."""
+
+    COLORS = {
+        "video": "#3A3A3A",
+        "content": "#3A3A3A",
+        "focus": "#4A4335",
+        "cam": "#4A4335",
+        "text": "#F5F5F4",
+        "image": "#F5C400",
+    }
+    NAMES = {
+        "video": "vídeo",
+        "content": "conteúdo",
+        "focus": "rosto",
+        "cam": "webcam",
+        "text": "texto",
+        "image": "imagem",
+    }
+
+    def __init__(self, layout, parent=None):
+        super().__init__(parent)
+        self._layout = layout
+        self.setFixedSize(46, 82)
+
+    def paintEvent(self, _event):  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
+        path = QPainterPath()
+        path.addRoundedRect(rect, 5, 5)
+        painter.setClipPath(path)
+        painter.fillRect(rect, QColor("#121212"))
+        y = rect.top()
+        total = sum(s.height for s in self._layout.slots) or 1.0
+        font = QFont()
+        font.setPixelSize(8)
+        painter.setFont(font)
+        for slot in self._layout.slots:
+            h = rect.height() * slot.height / total
+            area = QRectF(rect.left(), y, rect.width(), h).adjusted(2, 1, -2, -1)
+            color = QColor(self.COLORS.get(slot.kind, "#3A3A3A"))
+            if self._layout.legacy:
+                painter.fillRect(rect, QColor("#262626"))
+                area = QRectF(rect.left() + 2, rect.center().y() - 12, rect.width() - 4, 24)
+            painter.fillRect(area, color)
+            painter.setPen(QColor("#121212") if slot.kind in ("text", "image") else QColor("#D6D3D1"))
+            painter.drawText(area, Qt.AlignCenter, self.NAMES.get(slot.kind, slot.kind))
+            y += h
+        painter.setClipping(False)
+        painter.setPen(QPen(QColor(theme.LINE_STRONG), 1))
+        painter.setBrush(Qt.NoBrush)
+        painter.drawPath(path)
+
+
+class LayoutCard(QFrame):
+    """Card selecionavel de formato de short."""
+
+    clicked = Signal(str)
+
+    def __init__(self, layout, parent=None):
+        super().__init__(parent)
+        self.layout_id = layout.id
+        self._selected = False
+        self.setObjectName("PresetCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(f"Formato {layout.name}")
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(10, 8, 10, 8)
+        row.setSpacing(10)
+        row.addWidget(LayoutSchematic(layout), 0, Qt.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(4)
+        head = QHBoxLayout()
+        head.setSpacing(6)
+        head.addWidget(label(layout.name, "FieldLabel"), 1)
+        head.addWidget(label(layout.tag, "MiniPill"), 0, Qt.AlignRight)
+        col.addLayout(head)
+        col.addWidget(label(layout.description, "Faint", wrap=True))
+        if layout.requires:
+            col.addWidget(label("Precisa de imagem auxiliar", "FieldHint"))
+        col.addStretch(1)
+        row.addLayout(col, 1)
+        self._apply_style()
+
+    def set_selected(self, selected: bool):
+        if self._selected != bool(selected):
+            self._selected = bool(selected)
+            self._apply_style()
+
+    def _apply_style(self):
+        border = (
+            f"1.5px solid {theme.ACCENT}" if self._selected else f"1px solid {theme.LINE}"
+        )
+        bg = theme.ACCENT_SOFT if self._selected else theme.PANEL_2
+        self.setStyleSheet(
+            f"QFrame#PresetCard {{ background-color: {bg}; border: {border}; border-radius: 6px; }} "
+            f"QFrame#PresetCard:hover {{ border: 1px solid {theme.LINE_STRONG}; }} "
+            f"QFrame#PresetCard:focus {{ border: 2px solid {theme.ACCENT_TEXT}; }}"
+        )
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.setFocus(Qt.MouseFocusReason)
+            self.clicked.emit(self.layout_id)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self.layout_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class LayoutGrid(QWidget):
+    """Galeria de formatos com selecao exclusiva."""
+
+    layout_selected = Signal(str)
+
+    def __init__(self, layouts: dict, columns: int = 2, parent=None):
+        super().__init__(parent)
+        self.cards: dict[str, LayoutCard] = {}
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        for idx, (lid, lay) in enumerate(layouts.items()):
+            card = LayoutCard(lay, self)
+            card.clicked.connect(self._on_clicked)
+            self.cards[lid] = card
+            grid.addWidget(card, idx // columns, idx % columns)
+
+    def _on_clicked(self, layout_id: str):
+        self.select_layout(layout_id)
+        self.layout_selected.emit(layout_id)
+
+    def select_layout(self, layout_id: str):
+        for lid, card in self.cards.items():
+            card.set_selected(lid == layout_id)
 
 
 class CollapsibleBox(QWidget):

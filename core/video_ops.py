@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Event
 
-from core import audio, cache, captions, render, transcriber
+from core import audio, cache, captions, framing, layouts, render, transcriber
 from core.config import OUTPUT_DIR
 from core.exceptions import (
     PipelineCancelledError,
@@ -212,6 +212,35 @@ def _process_vertical(
         clip["start"], clip["end"], total_duration, options.padding_s
     )
 
+    layout = layouts.get_layout(options.layout_id)
+    band_text = (
+        layouts.clip_band_text(
+            clip, options.layout_text_source, options.layout_custom_text
+        )
+        if layout.has_text
+        else ""
+    )
+    plan = None
+    if layout.needs_vision:
+        speech_words = (
+            captions.words_in_window(segments, cut_start, cut_end) if segments else []
+        )
+        plan = framing.analyze_clip(
+            video_path,
+            cut_start,
+            cut_end,
+            words=speech_words,
+            want_cam=any(s.kind in ("cam", "content") for s in layout.slots),
+            cache_path=Path(out_path).parent / ".cache" / f"framing_{index:03d}.json",
+            cache_key={
+                "video": cache.video_hash(video_path),
+                "window": [round(cut_start, 3), round(cut_end, 3)],
+                "layout": layout.id,
+            },
+        )
+    check_cancelled(cancel_event)
+    extra = {"plan": plan, "band_text": band_text}
+
     if options.captions_enabled:
         words = _clip_words(
             video_path,
@@ -225,7 +254,10 @@ def _process_vertical(
         )
         if words:
             with tempfile.TemporaryDirectory(prefix="autocut_caps_") as tmp_dir:
-                ass_path = _write_clip_captions(words, options, tmp_dir)
+                # Tamanho e posicao da legenda dependem do formato escolhido.
+                ass_path = _write_clip_captions(
+                    words, layouts.caption_options(options), tmp_dir
+                )
                 return render.render_clip(
                     video_path,
                     cut_start,
@@ -234,6 +266,7 @@ def _process_vertical(
                     options=options,
                     ass_path=ass_path,
                     cancel_event=cancel_event,
+                    **extra,
                 )
 
     return render.render_clip(
@@ -243,6 +276,7 @@ def _process_vertical(
         out_path,
         options=options,
         cancel_event=cancel_event,
+        **extra,
     )
 
 
@@ -296,7 +330,12 @@ def cut_all(
 
     if vertical is None:
         # Legendas exigem o caminho de render (que queima o .ass).
-        vertical = options.vertical_enabled or options.captions_enabled
+        vertical = (
+            options.vertical_enabled
+            or options.captions_enabled
+            or options.layout_id != layouts.DEFAULT_LAYOUT_ID
+            or bool(options.aux_audio_path)
+        )
 
     out_dir = Path(output_dir) if output_dir else OUTPUT_DIR / Path(video_path).stem
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -60,6 +60,22 @@ class ProcessingOptions:
     # Efeito glow (brilho difuso em volta do texto)
     caption_glow: bool = False
 
+    # --- Formato do short (core/layouts.py) e itens auxiliares ---
+    layout_id: str = "center"
+    # Fonte do texto da faixa: "hook" (gancho da IA), "title" ou "custom".
+    layout_text_source: str = "hook"
+    layout_custom_text: str = ""
+    # Faixa padrao: vermelha, texto branco em caixa alta e linhas brancas.
+    layout_band_color: str = "#D90A0A"
+    layout_text_color: str = "#FFFFFF"
+    layout_text_font: str = "Impact"
+    layout_text_uppercase: bool = True
+    layout_band_border: bool = True
+    aux_image_path: str = ""
+    aux_audio_path: str = ""
+    # Volume da musica de fundo (0-1); ela abaixa sozinha quando ha voz.
+    aux_audio_volume: float = 0.18
+
     # --- Cortes & IA ---
     max_clips: int = cfg.MAX_CLIPS
     min_viral_score: int = cfg.MIN_VIRAL_SCORE
@@ -116,6 +132,17 @@ class ProcessingOptions:
         elif self.caption_animation != "pop":
             self.caption_animation = "pop"
         self.caption_glow = bool(self.caption_glow)
+        from core.layouts import LAYOUTS, TEXT_SOURCES
+
+        if self.layout_id not in LAYOUTS:
+            self.layout_id = "center"
+        if self.layout_text_source not in TEXT_SOURCES:
+            self.layout_text_source = "hook"
+        self.layout_custom_text = str(self.layout_custom_text or "").strip()
+        self.layout_text_font = str(self.layout_text_font or "").strip() or "Impact"
+        self.aux_image_path = str(self.aux_image_path or "").strip()
+        self.aux_audio_path = str(self.aux_audio_path or "").strip()
+        self.aux_audio_volume = max(0.0, min(1.0, float(self.aux_audio_volume or 0.0)))
         return self
 
     @classmethod
@@ -155,6 +182,15 @@ class ProcessingOptions:
         opts = cls()
         if not data:
             return opts
+        if "layout_text_font" not in data:
+            # configuracao salva antes do estilo novo: troca a faixa branca
+            # antiga (padrao de entao) pelo padrao atual.
+            data = dict(data)
+            if str(data.get("layout_band_color", "")).upper() == "#FFFFFF" and str(
+                data.get("layout_text_color", "")
+            ).upper() == "#121212":
+                data.pop("layout_band_color", None)
+                data.pop("layout_text_color", None)
         known = {f.name for f in fields(cls)}
         for key, value in data.items():
             if key not in known or value is None:

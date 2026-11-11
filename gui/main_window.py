@@ -31,7 +31,6 @@ from core.captions.presets import (
     apply_preset,
     detect_active_preset,
 )
-from core.config import BASE_DIR, OUTPUT_DIR
 from core.options import ProcessingOptions
 from gui.controllers.pipeline_controller import PipelineController
 from gui.projects_dialog import (
@@ -40,6 +39,7 @@ from gui.projects_dialog import (
     open_upload_pages,
     update_published_button_ui,
 )
+from core.layouts import LAYOUTS, get_layout, missing_requirements
 from gui import theme
 from gui.thumbnails import FrameLoader, poster_pixmap
 from gui.settings_dialog import RESOLUTIONS, SettingsDialog
@@ -358,10 +358,8 @@ class MainWindow(QMainWindow):
 
         info_col = QVBoxLayout()
         info_col.setSpacing(1)
-        self.path_label = label(
-            "Nenhum vídeo selecionado", "FieldLabel", wrap=True
-        )
-        self.file_size_label = label("—", "Faint")
+        self.path_label = ElidedLabel("Nenhum vídeo selecionado", "FieldLabel")
+        self.file_size_label = ElidedLabel("—", "Faint")
         info_col.addWidget(self.path_label)
         info_col.addWidget(self.file_size_label)
         sel_row.addLayout(info_col, 1)
@@ -460,6 +458,20 @@ class MainWindow(QMainWindow):
         self.captions_checkbox.setChecked(self.options.captions_enabled)
         self.captions_checkbox.toggled.connect(self.on_captions_toggled)
         controls_col.addWidget(self.captions_checkbox)
+
+        # Formato do short (pre-definido; detalhes e itens auxiliares em Ajustes)
+        layout_box = QVBoxLayout()
+        layout_box.setSpacing(4)
+        layout_box.addWidget(label("Formato do short", "FieldLabel"))
+        self.quick_layout_combo = QComboBox()
+        for lid, lay in LAYOUTS.items():
+            self.quick_layout_combo.addItem(f"{lay.name} ({lay.tag})", lid)
+        self.quick_layout_combo.setToolTip(
+            "Imagem auxiliar, música e texto da faixa ficam em Ajustes → Formato"
+        )
+        self.quick_layout_combo.currentIndexChanged.connect(self._on_quick_layout_changed)
+        layout_box.addWidget(self.quick_layout_combo)
+        controls_col.addLayout(layout_box)
 
         # Seletor rápido de Preset de Legenda
         preset_box = QVBoxLayout()
@@ -860,9 +872,8 @@ class MainWindow(QMainWindow):
     # --- Frames reais (previa e miniaturas)
     def _set_preview_frame(self, image):
         self.phone_preview.set_frame(image)
-        settings_preview = getattr(self.settings_view, "preview_widget", None)
-        if settings_preview is not None:
-            settings_preview.set_frame(image)
+        if hasattr(self.settings_view, "set_preview_frame"):
+            self.settings_view.set_preview_frame(image)
 
     def _on_frame_loaded(self, key: str, jpg_path: str):
         if key.startswith("preview:"):
@@ -990,6 +1001,21 @@ class MainWindow(QMainWindow):
             self._save_options()
             self._refresh_summary()
 
+    def _on_quick_layout_changed(self, *_args):
+        if self._syncing_quick:
+            return
+        lid = self.quick_layout_combo.currentData()
+        if not lid:
+            return
+        self.options.layout_id = lid
+        self._save_options()
+        self._refresh_summary()
+        missing = missing_requirements(get_layout(lid), self.options.aux_image_path)
+        if missing:
+            self.log_view.appendPlainText(
+                "Formato escolhido precisa de itens auxiliares: abra Ajustes → Formato."
+            )
+
     def _on_quick_params_changed(self, *_args):
         if self._syncing_quick:
             return
@@ -1085,6 +1111,7 @@ class MainWindow(QMainWindow):
                 self.summary_values[key].setText(value)
 
         self.config_summary.setText(
+            f"Formato: {get_layout(o.layout_id).name}  ·  "
             f"Duração: {o.min_clip_duration}–{o.max_clip_duration}s  ·  "
             f"Zoom: {o.zoom:.2f}×  ·  "
             f"Encoder: {o.encoder or 'auto'} (CRF {o.crf})"
@@ -1102,6 +1129,9 @@ class MainWindow(QMainWindow):
 
             self.quick_max_clips.setValue(o.max_clips)
             self.quick_min_score.setValue(o.min_viral_score)
+            idx_layout = self.quick_layout_combo.findData(o.layout_id)
+            if idx_layout >= 0:
+                self.quick_layout_combo.setCurrentIndex(idx_layout)
 
             for idx in range(self.quick_whisper_combo.count()):
                 if self.quick_whisper_combo.itemData(idx) == o.whisper_model:
@@ -1150,6 +1180,11 @@ class MainWindow(QMainWindow):
             self.clear_video()
             return
         issues = self._environment_issues()
+        issues += missing_requirements(
+            get_layout(self.options.layout_id), self.options.aux_image_path
+        )
+        if self.options.aux_audio_path and not Path(self.options.aux_audio_path).is_file():
+            issues.append("A música de fundo escolhida não existe mais (Ajustes → Formato).")
         if issues:
             self._refresh_env_status()
             QMessageBox.warning(
@@ -1210,6 +1245,7 @@ class MainWindow(QMainWindow):
         self.quick_min_score.setEnabled(not busy)
         self.quick_whisper_combo.setEnabled(not busy)
         self.quick_res_combo.setEnabled(not busy)
+        self.quick_layout_combo.setEnabled(not busy)
         self.video_link.setEnabled(not busy)
         self.focus_input.setReadOnly(busy)
         self.source_tabs.setEnabled(not busy)
@@ -1384,6 +1420,8 @@ class MainWindow(QMainWindow):
             pass
         kicker.addWidget(score_lbl)
         kicker.addWidget(label(str(clip.get("category") or "CORTE"), "ClipCat"))
+        if clip.get("layout") and clip.get("layout") != "center":
+            kicker.addWidget(label(get_layout(clip["layout"]).name, "ClipCat"))
         kicker.addStretch(1)
         kicker.addWidget(
             label(
