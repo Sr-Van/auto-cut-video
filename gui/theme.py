@@ -5,6 +5,8 @@ diretas (azul para ação principal, verde para sucesso/publicado, âmbar para
 progresso ativo e vermelho para erro/exclusão).
 """
 
+from pathlib import Path
+
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
@@ -18,12 +20,14 @@ PANEL_3 = "#242936"
 # --- Tipografia ---
 TEXT = "#F3F4F6"
 MUTED = "#9CA3AF"
-FAINT = "#6B7280"
+FAINT = "#8B94A7"  # >= 4.5:1 sobre os paineis (WCAG AA)
 
 # --- Ação e Semântica Direta ---
 ACCENT = "#2563EB"
 ACCENT_HOVER = "#1D4ED8"
 ACCENT_SOFT = "rgba(37, 99, 235, 0.14)"
+# Azul para TEXTO sobre fundo escuro (ACCENT puro falha AA em texto).
+ACCENT_TEXT = "#60A5FA"
 SUCCESS = "#10B981"
 SUCCESS_SOFT = "rgba(16, 185, 129, 0.14)"
 WARNING = "#F59E0B"
@@ -45,15 +49,20 @@ CORAL = DANGER
 LINE_LIME = LINE_ACCENT
 
 
+ASSETS_DIR = Path(__file__).resolve().parent / "assets"
+
+
 def _pick_font(candidates, fallback):
     families = set(QFontDatabase.families())
-    for name in candidates:
+    for name in [*candidates, fallback]:
         if name in families:
             return name
-    return fallback
+    # Nenhuma candidata instalada: usa a fonte real do sistema.
+    return QFontDatabase.systemFont(QFontDatabase.GeneralFont).family()
 
 
 def stylesheet(sans: str, serif: str, mono: str) -> str:
+    assets = ASSETS_DIR.as_posix()
     return f"""
 * {{
     font-family: "{sans}";
@@ -197,6 +206,7 @@ QPushButton#NavTab:checked {{
 
 /* ---------- Inputs ---------- */
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit {{
+    min-height: 20px;
     background: {PANEL_2};
     border: 1px solid {LINE_STRONG};
     border-radius: 6px;
@@ -221,14 +231,50 @@ QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled, QComboBox:disabl
     background: {BG_2};
     border-color: {LINE};
 }}
-QSpinBox::up-button, QSpinBox::down-button,
-QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{
-    width: 0px;
+QSpinBox, QDoubleSpinBox {{
+    padding-right: 20px;
+}}
+QSpinBox::up-button, QDoubleSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
     border: none;
+    border-left: 1px solid {LINE};
+    border-top-right-radius: 6px;
+}}
+QSpinBox::down-button, QDoubleSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    border: none;
+    border-left: 1px solid {LINE};
+    border-bottom-right-radius: 6px;
+}}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {{
+    background: {PANEL_3};
+}}
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {{
+    image: url("{assets}/chevron-up.svg");
+    width: 9px;
+    height: 5px;
+}}
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow,
+QComboBox::down-arrow {{
+    image: url("{assets}/chevron-down.svg");
+    width: 9px;
+    height: 5px;
 }}
 QComboBox::drop-down {{
     border: none;
     width: 22px;
+}}
+
+/* ---------- Foco por teclado ---------- */
+QPushButton:focus, QToolButton:focus, QCheckBox:focus, QRadioButton:focus,
+QTabBar::tab:focus, #PresetCard:focus {{
+    border: 1px solid {ACCENT_TEXT};
+    outline: none;
 }}
 QComboBox QAbstractItemView {{
     background: {PANEL_2};
@@ -396,7 +442,7 @@ QPushButton#Dropzone:hover {{
 #FileSelectedBadge {{
     background: {ACCENT_SOFT};
     border-radius: 5px;
-    color: {ACCENT};
+    color: {ACCENT_TEXT};
     font-weight: 700;
 }}
 
@@ -421,7 +467,7 @@ QProgressBar::chunk {{
     font-weight: 600;
 }}
 #Percent {{
-    color: {ACCENT};
+    color: {ACCENT_TEXT};
     font-family: "{mono}";
     font-size: 14px;
     font-weight: 700;
@@ -653,6 +699,19 @@ QPushButton#ProjectHeaderBtn {{
     font-size: 13px;
     font-weight: 600;
 }}
+#ProjectHeaderArrow {{
+    color: {MUTED};
+    font-size: 12px;
+}}
+#ProjectHeaderTitle {{
+    font-size: 13px;
+    font-weight: 600;
+}}
+#ProjectHeaderMeta {{
+    color: {MUTED};
+    font-family: "{mono}";
+    font-size: 11px;
+}}
 QPushButton#ProjectHeaderBtn:hover {{
     background: rgba(255, 255, 255, 0.02);
 }}
@@ -716,7 +775,14 @@ QScrollBar::add-page, QScrollBar::sub-page {{
     width: 0px;
 }}
 QScrollBar:horizontal {{
-    height: 0px;
+    background: {BG};
+    height: 8px;
+    margin: 0px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {PANEL_3};
+    border-radius: 4px;
+    min-width: 28px;
 }}
 QMessageBox QLabel {{
     color: {TEXT};

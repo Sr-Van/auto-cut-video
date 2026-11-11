@@ -8,6 +8,7 @@ from PySide6.QtCore import (
     QRectF,
     QSize,
     Qt,
+    QTimer,
     Signal,
 )
 from PySide6.QtGui import (
@@ -41,6 +42,77 @@ def label(text: str, name: str | None = None, wrap: bool = False) -> QLabel:
         widget.setObjectName(name)
     widget.setWordWrap(wrap)
     return widget
+
+
+def _luminance(hex_color: str) -> float:
+    c = QColor(hex_color)
+    def ch(v):
+        v /= 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    return 0.2126 * ch(c.red()) + 0.7152 * ch(c.green()) + 0.0722 * ch(c.blue())
+
+
+def contrast_ratio(fg: str, bg: str) -> float:
+    a, b = sorted((_luminance(fg), _luminance(bg)), reverse=True)
+    return (a + 0.05) / (b + 0.05)
+
+
+def readable_text_on(bg: str, preferred: str) -> str:
+    """Mantem a cor preferida se passar AA (4.5:1); senao usa escuro ou branco."""
+    if contrast_ratio(preferred, bg) >= 4.5:
+        return preferred
+    dark, light = "#0A0D12", "#FFFFFF"
+    return dark if contrast_ratio(dark, bg) >= contrast_ratio(light, bg) else light
+
+
+class ElidedLabel(QLabel):
+    """QLabel de linha unica que corta com reticencias em vez de alargar o layout."""
+
+    def __init__(self, text: str = "", name: str | None = None, parent=None):
+        super().__init__(parent)
+        self._full_text = text
+        if name:
+            self.setObjectName(name)
+        self.setMinimumWidth(40)
+        from PySide6.QtWidgets import QSizePolicy
+
+        self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.setToolTip(text)
+        self._refresh()
+
+    def setText(self, text: str):  # noqa: N802
+        self._full_text = text
+        self.setToolTip(text)
+        self._refresh()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._refresh()
+
+    def _refresh(self):
+        elided = self.fontMetrics().elidedText(
+            self._full_text, Qt.ElideRight, max(0, self.width())
+        )
+        super().setText(elided)
+
+
+def flash_button(button, text: str, ms: int = 1400) -> None:
+    """Confirma uma acao trocando o texto do botao por alguns instantes."""
+    original = button.property("_flash_original") or button.text()
+    button.setProperty("_flash_original", original)
+    button.setText(text)
+
+    def restore():
+        try:
+            button.setText(original)
+            button.setProperty("_flash_original", None)
+        except RuntimeError:  # widget ja destruido
+            pass
+
+    QTimer.singleShot(ms, restore)
 
 
 def eyebrow(text: str) -> QLabel:
@@ -104,6 +176,7 @@ class Switch(QAbstractButton):
         self.setCheckable(True)
         self.setText(text)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
         self._offset = 0.0
         self._anim = QPropertyAnimation(self, b"offset", self)
         self._anim.setDuration(140)
@@ -153,6 +226,11 @@ class Switch(QAbstractButton):
         painter.setPen(Qt.NoPen)
         painter.setBrush(color)
         painter.drawRoundedRect(track, 9, 9)
+        if self.hasFocus():
+            painter.setBrush(Qt.NoBrush)
+            painter.setPen(QPen(QColor(theme.ACCENT_TEXT), 1.5))
+            painter.drawRoundedRect(track.adjusted(-2, -2, 2, 2), 11, 11)
+            painter.setPen(Qt.NoPen)
 
         knob_x = track.left() + 3 + (32 - 18) * self._offset
         knob = QRectF(knob_x, track.top() + 3, 12, 12)
@@ -218,7 +296,7 @@ class UnderlineTabs(QFrame):
         self.group = QButtonGroup(self)
         self.group.setExclusive(True)
         for index, text in enumerate(labels):
-            button = QPushButton(text)
+            button = QPushButton(text.replace("&", "&&"))
             button.setObjectName("UnderlineTab")
             button.setCheckable(True)
             button.setCursor(Qt.PointingHandCursor)
@@ -536,6 +614,8 @@ class PresetCard(QFrame):
         self._selected = False
         self.setObjectName("PresetCard")
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(f"Preset de legenda {preset.name}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
@@ -566,12 +646,14 @@ class PresetCard(QFrame):
                 "border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 5px; padding: 2px 6px;"
             )
         elif opacity > 0.05:
+            fg = readable_text_on(hl, fg)
             sample.setStyleSheet(
                 f"background-color: {hl}; color: {fg}; "
                 f"font-family: '{font_family}'; font-weight: 800; font-size: 12px; "
                 "border-radius: 5px; padding: 2px 6px;"
             )
         else:
+            hl = readable_text_on("#12151C", hl)
             sample.setStyleSheet(
                 f"background-color: #12151C; color: {hl}; "
                 f"font-family: '{font_family}'; font-weight: 800; font-size: 12px; "
@@ -597,7 +679,9 @@ class PresetCard(QFrame):
                 "QFrame#PresetCard { "
                 f"background-color: {theme.ACCENT_SOFT}; "
                 f"border: 1.5px solid {theme.ACCENT}; "
-                "border-radius: 6px; }"
+                "border-radius: 6px; } "
+                "QFrame#PresetCard:focus { "
+                f"border: 2px solid {theme.ACCENT_TEXT}; }}"
             )
         else:
             self.setStyleSheet(
@@ -606,13 +690,23 @@ class PresetCard(QFrame):
                 f"border: 1px solid {theme.LINE}; "
                 "border-radius: 6px; } "
                 "QFrame#PresetCard:hover { "
-                f"border: 1px solid {theme.LINE_STRONG}; }}"
+                f"border: 1px solid {theme.LINE_STRONG}; }} "
+                "QFrame#PresetCard:focus { "
+                f"border: 1.5px solid {theme.ACCENT_TEXT}; }}"
             )
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self.setFocus(Qt.MouseFocusReason)
             self.clicked.emit(self.preset_id)
         super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self.preset_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
 
 class PresetGrid(QWidget):
