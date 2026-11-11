@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import shutil
+
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -38,8 +40,11 @@ from gui.projects_dialog import (
     open_upload_pages,
     update_published_button_ui,
 )
+from gui import theme
 from gui.settings_dialog import RESOLUTIONS, SettingsDialog
 from gui.widgets import (
+    ElidedLabel,
+    flash_button,
     Panel,
     PhonePreviewWidget,
     PipeStep,
@@ -75,6 +80,27 @@ STAGE_LABELS = {
 }
 
 TRANSCRIBE_LABELS = {"clip": "Por clipe", "full": "Completa"}
+
+
+_ERROR_HINTS = (
+    ("api key", "Verifique as chaves de IA no arquivo .env (API_KEY ou API_KEY_1...)."),
+    ("ffmpeg", "Confira se o FFmpeg está instalado e no PATH."),
+    ("informe yt_link", "Cole um link ou selecione um arquivo antes de processar."),
+    ("falha ao baixar", "Não foi possível baixar o vídeo. Confira o link e a conexão."),
+    ("quota", "A cota gratuita do provedor de IA acabou. Tente outra chave ou mais tarde."),
+    ("429", "O provedor de IA limitou as requisições. Aguarde um pouco e tente de novo."),
+    ("cuda", "Falha na GPU ao transcrever. Tente o modelo Whisper 'small' ou compute type int8."),
+)
+
+
+def friendly_error(error: str) -> str:
+    """Prefixa a mensagem tecnica com uma orientacao em linguagem simples."""
+    text = str(error or "Erro desconhecido.")
+    low = text.lower()
+    for needle, hint in _ERROR_HINTS:
+        if needle in low:
+            return f"{hint}\n\nDetalhe técnico:\n{text}"
+    return text
 
 
 class MainWindow(QMainWindow):
@@ -135,6 +161,12 @@ class MainWindow(QMainWindow):
 
         self.setCentralWidget(root)
         self._refresh_summary()
+        self.setAcceptDrops(True)
+        self._install_shortcuts()
+        self._refresh_env_status()
+        self._update_process_enabled()
+        self.report_button.setEnabled(False)
+        self.open_folder_button.setEnabled(False)
 
     # ------------------------------------------------------------------
     # Barra superior com navegação integrada
@@ -233,10 +265,29 @@ class MainWindow(QMainWindow):
         grid.setColumnStretch(1, 31)
 
         # Coluna Esquerda: Entrada + Ajustes Rápidos/Prévia + Botão Processar
+        # Entrada + configuracao rolam juntas; o botao Processar fica sempre visivel.
+        left_scroll_body = QWidget()
+        left_scroll_body.setObjectName("Root")
+        left_inner = QVBoxLayout(left_scroll_body)
+        left_inner.setContentsMargins(0, 0, 6, 0)
+        left_inner.setSpacing(12)
+        left_inner.addWidget(self._build_source_panel())
+        left_inner.addWidget(self._build_quick_config_panel(), 1)
+
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.NoFrame)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        left_scroll.setWidget(left_scroll_body)
+        # Sem rolagem horizontal: a coluna nunca fica mais estreita que o conteudo.
+        left_scroll.setMinimumWidth(
+            left_scroll_body.minimumSizeHint().width()
+            + left_scroll.verticalScrollBar().sizeHint().width()
+        )
+
         left_col = QVBoxLayout()
         left_col.setSpacing(12)
-        left_col.addWidget(self._build_source_panel())
-        left_col.addWidget(self._build_quick_config_panel(), 1)
+        left_col.addWidget(left_scroll, 1)
         left_col.addLayout(self._build_action_bar())
 
         # Coluna Direita: Progresso/Etapas + Painel de Cortes/Log
@@ -283,6 +334,10 @@ class MainWindow(QMainWindow):
         self.select_button.setObjectName("Dropzone")
         self.select_button.setCursor(Qt.PointingHandCursor)
         self.select_button.clicked.connect(self.select_video)
+        self.select_button.setText(
+            "Arraste um vídeo aqui ou clique para selecionar (MP4, MKV, MOV, AVI)"
+        )
+        self.select_button.setToolTip("Ctrl+O")
         file_layout.addWidget(self.select_button)
 
         self.file_selected_card = QFrame()
@@ -291,27 +346,27 @@ class MainWindow(QMainWindow):
         sel_row.setContentsMargins(10, 8, 10, 8)
         sel_row.setSpacing(8)
 
-        badge = QLabel("MP4")
-        badge.setObjectName("FileSelectedBadge")
-        badge.setAlignment(Qt.AlignCenter)
-        badge.setFixedSize(34, 26)
-        sel_row.addWidget(badge)
+        self.file_badge = QLabel("MP4")
+        self.file_badge.setObjectName("FileSelectedBadge")
+        self.file_badge.setAlignment(Qt.AlignCenter)
+        self.file_badge.setFixedSize(38, 26)
+        sel_row.addWidget(self.file_badge)
 
         info_col = QVBoxLayout()
         info_col.setSpacing(1)
         self.path_label = label(
-            "Nenhum video selecionado", "FieldLabel", wrap=True
+            "Nenhum vídeo selecionado", "FieldLabel", wrap=True
         )
         self.file_size_label = label("—", "Faint")
         info_col.addWidget(self.path_label)
         info_col.addWidget(self.file_size_label)
         sel_row.addLayout(info_col, 1)
 
-        change_btn = QPushButton("Trocar")
-        change_btn.setObjectName("Ghost")
-        change_btn.setCursor(Qt.PointingHandCursor)
-        change_btn.clicked.connect(self.select_video)
-        sel_row.addWidget(change_btn)
+        self.change_file_button = QPushButton("Trocar")
+        self.change_file_button.setObjectName("Ghost")
+        self.change_file_button.setCursor(Qt.PointingHandCursor)
+        self.change_file_button.clicked.connect(self.select_video)
+        sel_row.addWidget(self.change_file_button)
 
         self.clear_file_button = QPushButton("✕")
         self.clear_file_button.setObjectName("IconBtn")
@@ -325,6 +380,10 @@ class MainWindow(QMainWindow):
         self.source_stack.addWidget(file_page)
 
         panel.body.addWidget(self.source_stack)
+
+        self.env_status_label = label("", "FieldHint", wrap=True)
+        self.env_status_label.setTextFormat(Qt.RichText)
+        panel.body.addWidget(self.env_status_label)
 
         # --- Foco da análise
         focus_box = QVBoxLayout()
@@ -340,7 +399,7 @@ class MainWindow(QMainWindow):
             "Ex.: Focar em partes engraçadas · Priorizar polêmicas · Extrair dicas práticas diretas"
         )
         self.focus_input.setPlainText(self.options.focus_instruction)
-        self.focus_input.setFixedHeight(52)
+        self.focus_input.setFixedHeight(64)
         self.focus_input.setTabChangesFocus(True)
         self.focus_input.textChanged.connect(self._on_focus_edited)
         focus_box.addWidget(self.focus_input)
@@ -354,7 +413,9 @@ class MainWindow(QMainWindow):
         out_row.setSpacing(6)
         self.output_label = QLineEdit(self.output_dir)
         self.output_label.setObjectName("MonoInput")
-        self.output_label.textEdited.connect(self._on_output_edited)
+        self.output_label.editingFinished.connect(
+            lambda: self._on_output_edited(self.output_label.text())
+        )
         out_row.addWidget(self.output_label, 1)
 
         self.output_button = QPushButton("Escolher...")
@@ -404,7 +465,7 @@ class MainWindow(QMainWindow):
         self.quick_preset_combo = QComboBox()
         for pid, preset in VIRAL_PRESETS.items():
             self.quick_preset_combo.addItem(f"{preset.name} ({preset.tag})", pid)
-        self.quick_preset_combo.addItem("Personalizado (Custom)", "__custom__")
+        self.quick_preset_combo.addItem("Personalizado", "__custom__")
         self.quick_preset_combo.currentIndexChanged.connect(
             self._on_quick_preset_changed
         )
@@ -683,14 +744,152 @@ class MainWindow(QMainWindow):
 
     def _on_source_changed(self, index: int):
         self.source_stack.setCurrentIndex(index)
+        self._update_process_enabled()
 
     def _on_link_edited(self, text: str):
         if text.strip() and self.source_tabs.current() != 0:
             self.source_tabs.set_current(0)
+        self._update_process_enabled()
+
+    def _active_source(self) -> tuple[str | None, str | None]:
+        """Retorna (yt_link, video_path) apenas da aba visivel."""
+        if self.source_tabs.current() == 0:
+            link = self.video_link.text().strip()
+            return (link or None), None
+        return None, self.video_path
+
+    def _update_process_enabled(self):
+        if self.worker is not None:
+            return
+        link, path = self._active_source()
+        ready = bool(link) or bool(path)
+        self.process_button.setEnabled(ready)
+        self.process_button.setToolTip(
+            "Ctrl+Enter" if ready else "Cole um link ou selecione um vídeo para começar"
+        )
+
+    @staticmethod
+    def _configured_keys() -> tuple[list[str], list[str]]:
+        try:
+            from core import config as core_config
+
+            keys = [k for k in core_config.API_KEYS if k and k.strip()]
+            providers = sorted({core_config.detect_provider(k)[0] for k in keys})
+        except Exception:  # noqa: BLE001
+            return [], []
+        return keys, providers
+
+    def _environment_issues(self) -> list[str]:
+        issues = []
+        if not shutil.which("ffmpeg") or not shutil.which("ffprobe"):
+            issues.append(
+                "FFmpeg/ffprobe não encontrados no PATH. Instale o FFmpeg e reinicie o app."
+            )
+        keys, _providers = self._configured_keys()
+        if not keys:
+            issues.append(
+                "Nenhuma chave de IA configurada. Copie .env.example para .env e preencha API_KEY."
+            )
+        return issues
+
+    def _refresh_env_status(self):
+        ff_ok = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
+        keys, providers = self._configured_keys()
+        ok, bad = theme.SUCCESS, theme.DANGER
+        ff = (
+            f'<span style="color:{ok}">✓ FFmpeg</span>'
+            if ff_ok
+            else f'<span style="color:{bad}">✕ FFmpeg ausente</span>'
+        )
+        if keys:
+            ia = (
+                f'<span style="color:{ok}">✓ {len(keys)} chave(s) de IA</span>'
+                f" ({', '.join(providers)})"
+            )
+        else:
+            ia = f'<span style="color:{bad}">✕ Sem chave de IA no .env</span>'
+        self.env_status_label.setText(f"{ff} &nbsp;·&nbsp; {ia}")
+
+    # --- Arrastar e soltar video na janela
+    VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+
+    def _dropped_video(self, event) -> str | None:
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            local = url.toLocalFile()
+            if local and Path(local).suffix.lower() in self.VIDEO_EXTS:
+                return local
+        return None
+
+    def dragEnterEvent(self, event):  # noqa: N802
+        if self.worker is None and self._dropped_video(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):  # noqa: N802
+        path = self._dropped_video(event)
+        if path and self.worker is None:
+            self.workspace_button.setChecked(True)
+            self._set_selected_video(path)
+            event.acceptProposedAction()
+
+    def closeEvent(self, event):  # noqa: N802
+        if self.worker is not None:
+            answer = QMessageBox.question(
+                self,
+                "Processamento em andamento",
+                "Um vídeo ainda está sendo processado. Cancelar e sair?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                event.ignore()
+                return
+            self.controller.cancel_pipeline()
+            wait = getattr(self.worker, "wait", None)
+            if callable(wait):
+                wait(5000)
+        super().closeEvent(event)
+
+    def _install_shortcuts(self):
+        def nav(i):
+            btn = self.nav_group.button(i)
+            if btn is not None and btn.isEnabled():
+                btn.setChecked(True)
+
+        def run_process():
+            if self.process_button.isEnabled():
+                self.process()
+
+        def run_select():
+            if self.select_button.isEnabled():
+                self.select_video()
+
+        def run_cancel():
+            if self.cancel_button.isEnabled():
+                self.cancel_processing()
+
+        bindings = [
+            ("Ctrl+Return", run_process),
+            ("Ctrl+Enter", run_process),
+            ("Ctrl+O", run_select),
+            ("Escape", run_cancel),
+            ("Ctrl+1", lambda: nav(0)),
+            ("Ctrl+2", lambda: nav(1)),
+            ("Ctrl+3", lambda: nav(2)),
+        ]
+        self._shortcuts = []
+        for seq, fn in bindings:
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.activated.connect(fn)
+            self._shortcuts.append(sc)
 
     def _on_output_edited(self, text: str):
         folder = text.strip()
-        if folder:
+        if folder and folder != self.output_dir:
             self.output_dir = folder
             self.controller.save_output_dir(folder)
 
@@ -710,16 +909,20 @@ class MainWindow(QMainWindow):
             self.file_size_label.setText(f"{p.name} · {size_mb:.1f} MB")
         except OSError:
             self.file_size_label.setText(p.name)
+        ext = p.suffix.lstrip(".").upper() or "VID"
+        self.file_badge.setText(ext[:4])
         self.select_button.setVisible(False)
         self.file_selected_card.setVisible(True)
         self.source_tabs.set_current(1)
+        self._update_process_enabled()
 
     def clear_video(self):
         self.video_path = None
-        self.path_label.setText("Nenhum video selecionado")
+        self.path_label.setText("Nenhum vídeo selecionado")
         self.file_size_label.setText("—")
         self.file_selected_card.setVisible(False)
         self.select_button.setVisible(True)
+        self._update_process_enabled()
 
     def select_output_dir(self):
         folder = QFileDialog.getExistingDirectory(
@@ -894,6 +1097,32 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(value)
 
     def process(self):
+        if self.worker is not None:
+            return
+        yt_link, video_path = self._active_source()
+        if not yt_link and not video_path:
+            QMessageBox.information(
+                self,
+                "Nada para processar",
+                "Cole o link de um vídeo na aba Link ou selecione um arquivo na aba Arquivo.",
+            )
+            return
+        if video_path and not Path(video_path).is_file():
+            QMessageBox.warning(
+                self, "Arquivo não encontrado", f"O vídeo não existe mais:\n{video_path}"
+            )
+            self.clear_video()
+            return
+        issues = self._environment_issues()
+        if issues:
+            self._refresh_env_status()
+            QMessageBox.warning(
+                self,
+                "Configuração incompleta",
+                "Antes de processar, resolva:\n\n• " + "\n• ".join(issues),
+            )
+            return
+
         self.set_busy(True)
         self.progress_bar.setValue(0)
         self.log_view.clear()
@@ -905,13 +1134,15 @@ class MainWindow(QMainWindow):
         self.options.focus_instruction = self.focus_input.toPlainText().strip()
 
         self.worker = self.controller.start_pipeline(
-            yt_link=self.video_link.text().strip(),
-            video_path=self.video_path,
+            yt_link=yt_link,
+            video_path=video_path,
             output_dir=self.output_dir,
             options=self.options,
         )
         if not self.worker:
+            self.worker = None
             self.set_busy(False)
+            self._update_process_enabled()
 
     def cancel_processing(self):
         if self.controller.cancel_pipeline():
@@ -926,6 +1157,7 @@ class MainWindow(QMainWindow):
     def set_busy(self, busy: bool):
         self.select_button.setEnabled(not busy)
         self.clear_file_button.setEnabled(not busy)
+        self.change_file_button.setEnabled(not busy)
         self.process_button.setEnabled(not busy)
         self.cancel_button.setVisible(busy)
         self.cancel_button.setEnabled(busy)
@@ -933,7 +1165,7 @@ class MainWindow(QMainWindow):
         self.output_button.setEnabled(not busy)
         self.reset_output_button.setEnabled(not busy)
         self.output_label.setEnabled(not busy)
-        self.projects_button.setEnabled(not busy)
+        # Projetos segue disponivel durante o processamento (revisar/postar).
         self.settings_button.setEnabled(not busy)
         self.summary_edit_button.setEnabled(not busy)
         self.captions_checkbox.setEnabled(not busy)
@@ -950,6 +1182,9 @@ class MainWindow(QMainWindow):
         )
         if busy:
             self._set_header_status("Processando...", "busy")
+        else:
+            self.worker = None
+            self._update_process_enabled()
 
     def on_stage(self, stage: str):
         stage_text = STAGE_LABELS.get(stage, stage)
@@ -1007,6 +1242,14 @@ class MainWindow(QMainWindow):
         self._set_header_status("Concluído", "done")
         self._render_results(clips, self.clip_paths, self.report_path)
         self.output_tabs.set_current(0)
+        has_output = bool(self.clip_paths or self.report_path)
+        self.report_button.setEnabled(bool(self.report_path))
+        self.open_folder_button.setEnabled(has_output)
+        if not clips:
+            self.log_view.appendPlainText(
+                "Nenhum corte atingiu a nota mínima. Reduza 'Nota mín.' ou o "
+                "direcionamento da IA e processe de novo (a transcrição fica em cache)."
+            )
 
     def on_cancelled(self, message: str):
         self.set_busy(False)
@@ -1025,7 +1268,7 @@ class MainWindow(QMainWindow):
             if step.property("state") == "active":
                 step.set_state("error")
         self.log_view.appendPlainText(f"[ERRO] {error}")
-        QMessageBox.critical(self, "Erro", error)
+        QMessageBox.critical(self, "Não foi possível concluir", friendly_error(error))
 
     # ------------------------------------------------------------------
     # Mostragem dos Cortes Gerados
@@ -1149,7 +1392,10 @@ class MainWindow(QMainWindow):
             copy_btn.setObjectName("Ghost")
             copy_btn.setCursor(Qt.PointingHandCursor)
             copy_btn.clicked.connect(
-                lambda _=False, p=path: QApplication.clipboard().setText(str(p))
+                lambda _=False, p=path, b=copy_btn: (
+                    QApplication.clipboard().setText(str(p)),
+                    flash_button(b, "✓ Copiado"),
+                )
             )
             actions.addWidget(copy_btn)
 
@@ -1181,9 +1427,10 @@ class MainWindow(QMainWindow):
 
         actions.addStretch(1)
         if path:
-            fname = label(Path(path).name, "ClipPath")
+            # Nome do arquivo em linha propria e elidido: nunca alarga o card.
+            fname = ElidedLabel(Path(path).name, "ClipPath")
             fname.setToolTip(str(path))
-            actions.addWidget(fname)
+            body.addWidget(fname)
         body.addLayout(actions)
 
         row.addLayout(body, 1)

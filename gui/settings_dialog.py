@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QMessageBox,
     QScrollArea,
     QSpinBox,
     QStackedWidget,
@@ -182,7 +183,8 @@ class SettingsDialog(QDialog):
         # --- Corpo rolável
         self.stack = QStackedWidget()
         self.stack.addWidget(self._wrap_scroll(self._build_video_tab()))
-        self.stack.addWidget(self._wrap_scroll(self._build_caption_tab()))
+        # A aba Legenda tem rolagem propria: a previa 9:16 fica fixa ao lado.
+        self.stack.addWidget(self._build_caption_tab())
         self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))
         self.tabs.changed.connect(self.stack.setCurrentIndex)
         root.addWidget(self.stack, 1)
@@ -328,11 +330,14 @@ class SettingsDialog(QDialog):
         pane = QWidget()
         pane.setObjectName("Root")
         outer = QHBoxLayout(pane)
-        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setContentsMargins(20, 18, 8, 18)
         outer.setSpacing(20)
 
-        # --- Coluna principal de controles
-        left = QVBoxLayout()
+        # --- Coluna principal de controles (rolavel)
+        left_holder = QWidget()
+        left_holder.setObjectName("Root")
+        left = QVBoxLayout(left_holder)
+        left.setContentsMargins(0, 0, 8, 0)
         left.setSpacing(12)
 
         top_bar = QHBoxLayout()
@@ -495,7 +500,9 @@ class SettingsDialog(QDialog):
 
         left.addWidget(self.advanced_box)
         left.addStretch(1)
-        outer.addLayout(left, 1)
+        left_scroll = self._wrap_scroll(left_holder)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        outer.addWidget(left_scroll, 1)
 
         # --- Coluna lateral de prévia 9:16
         preview_box = QFrame()
@@ -762,7 +769,18 @@ class SettingsDialog(QDialog):
         self._refresh_preview()
 
     def _restore_defaults(self):
+        answer = QMessageBox.question(
+            self,
+            "Restaurar padrões",
+            "Substituir todos os ajustes de vídeo, legenda e IA pelos valores padrão?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
         self._load(ProcessingOptions())
+        if getattr(self, "status_hint", None) is not None:
+            self.status_hint.setText("Padrões restaurados e salvos.")
         self._refresh_preview()
 
     def _load_caption_fields(self, options: ProcessingOptions):
