@@ -3,7 +3,7 @@ from pathlib import Path
 import shutil
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QDesktopServices, QIcon, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
@@ -41,6 +41,7 @@ from gui.projects_dialog import (
     update_published_button_ui,
 )
 from gui import theme
+from gui.thumbnails import FrameLoader, poster_pixmap
 from gui.settings_dialog import RESOLUTIONS, SettingsDialog
 from gui.widgets import (
     ElidedLabel,
@@ -115,6 +116,9 @@ class MainWindow(QMainWindow):
         self.report_path: str | None = None
         self._syncing_quick = False
 
+        self.frames = FrameLoader(self)
+        self.frames.loaded.connect(self._on_frame_loaded)
+        self._thumb_targets: dict[str, list] = {}
         self.controller = PipelineController(self)
         self.settings = self.controller.settings
         self.output_dir = self.controller.load_output_dir()
@@ -231,7 +235,7 @@ class MainWindow(QMainWindow):
 
         layout.addStretch(1)
 
-        self.header_status_pill = label("Status: Pronto", "StatusPill")
+        self.header_status_pill = label("Pronto", "StatusPill")
         self.header_status_pill.setProperty("state", "idle")
         layout.addWidget(self.header_status_pill)
         return header
@@ -246,7 +250,7 @@ class MainWindow(QMainWindow):
         self.main_stack.setCurrentIndex(index)
 
     def _set_header_status(self, text: str, state: str = "idle"):
-        self.header_status_pill.setText(f"Status: {text}")
+        self.header_status_pill.setText(text)
         self.header_status_pill.setProperty("state", state)
         self.header_status_pill.style().unpolish(self.header_status_pill)
         self.header_status_pill.style().polish(self.header_status_pill)
@@ -391,7 +395,6 @@ class MainWindow(QMainWindow):
         focus_head = QHBoxLayout()
         focus_head.addWidget(label("Direcionamento da IA (opcional)", "FieldLabel"))
         focus_head.addStretch(1)
-        focus_head.addWidget(label("regra extra", "FieldHint"))
         focus_box.addLayout(focus_head)
 
         self.focus_input = QPlainTextEdit()
@@ -854,6 +857,37 @@ class MainWindow(QMainWindow):
                 wait(5000)
         super().closeEvent(event)
 
+    # --- Frames reais (previa e miniaturas)
+    def _set_preview_frame(self, image):
+        self.phone_preview.set_frame(image)
+        settings_preview = getattr(self.settings_view, "preview_widget", None)
+        if settings_preview is not None:
+            settings_preview.set_frame(image)
+
+    def _on_frame_loaded(self, key: str, jpg_path: str):
+        if key.startswith("preview:"):
+            if self.video_path and key == "preview:" + self.video_path and jpg_path:
+                self._set_preview_frame(QImage(jpg_path))
+            return
+        if not jpg_path:
+            return
+        for button, label_text in self._thumb_targets.pop(key, []):
+            try:
+                size = button.size()
+                button.setIcon(QIcon(poster_pixmap(
+                    jpg_path, size.width(), size.height(), label_text,
+                    button.devicePixelRatioF(),
+                )))
+                button.setIconSize(size)
+                button.setText("")
+            except RuntimeError:  # card ja removido da tela
+                pass
+
+    def request_clip_thumb(self, button, clip_path: str, label_text: str):
+        key = "clip:" + clip_path
+        self._thumb_targets.setdefault(key, []).append((button, label_text))
+        self.frames.request_clip_thumb(clip_path)
+
     def _install_shortcuts(self):
         def nav(i):
             btn = self.nav_group.button(i)
@@ -909,6 +943,7 @@ class MainWindow(QMainWindow):
             self.file_size_label.setText(f"{p.name} · {size_mb:.1f} MB")
         except OSError:
             self.file_size_label.setText(p.name)
+        self.frames.request_preview(file_path)
         ext = p.suffix.lstrip(".").upper() or "VID"
         self.file_badge.setText(ext[:4])
         self.select_button.setVisible(False)
@@ -922,6 +957,7 @@ class MainWindow(QMainWindow):
         self.file_size_label.setText("—")
         self.file_selected_card.setVisible(False)
         self.select_button.setVisible(True)
+        self._set_preview_frame(None)
         self._update_process_enabled()
 
     def select_output_dir(self):
@@ -1321,6 +1357,8 @@ class MainWindow(QMainWindow):
         media.setObjectName("ResultMedia")
         media.setFixedSize(68, 116)
         media.setCursor(Qt.PointingHandCursor)
+        if path and Path(path).is_file():
+            self.request_clip_thumb(media, str(path), f"#{clip_index + 1}")
         if path:
             media.setToolTip(f"Assistir {path}")
             media.clicked.connect(

@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QColor,
     QFont,
     QFontMetricsF,
+    QImage,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -157,9 +158,9 @@ class Panel(QFrame):
         )
         self.head.addWidget(title_lbl)
 
-        if kicker and kicker.lower() != title.lower():
-            sub_lbl = label(kicker, "Faint")
-            self.head.addWidget(sub_lbl)
+        # O subtitulo (kicker) vira tooltip: o conteudo do painel ja se explica.
+        if kicker:
+            title_lbl.setToolTip(kicker)
 
         self.head.addStretch(1)
         self.body.addLayout(self.head)
@@ -235,7 +236,7 @@ class Switch(QAbstractButton):
         knob_x = track.left() + 3 + (32 - 18) * self._offset
         knob = QRectF(knob_x, track.top() + 3, 12, 12)
         painter.setBrush(
-            QColor("#FFFFFF") if self._offset > 0.5 else QColor("#9CA3AF")
+            QColor(theme.ON_ACCENT) if self._offset > 0.5 else QColor(theme.MUTED)
         )
         painter.drawEllipse(knob)
 
@@ -369,11 +370,64 @@ class PhonePreviewWidget(QWidget):
         self._phone_width = phone_width
         self._in_settings = in_settings
         self._options = ProcessingOptions()
+        self._frame: QImage | None = None
+        self._frame_cache: dict = {}
         self.setFixedSize(phone_width + 20, int(phone_width * 16 / 9) + 20)
 
     def set_options(self, options: ProcessingOptions):
         self._options = options
         self.update()
+
+    def set_frame(self, image: QImage | None):
+        """Usa um frame real do video no lugar da silhueta generica."""
+        self._frame = image if image is not None and not image.isNull() else None
+        self._frame_cache.clear()
+        self.update()
+
+    def has_frame(self) -> bool:
+        return self._frame is not None
+
+    def _paint_frame(self, painter: QPainter, rect: QRectF, opts) -> None:
+        """Replica o render: fundo 'cover' desfocado + video 'contain' * zoom."""
+        frame = self._frame
+        pw, ph = rect.width(), rect.height()
+        dpr = self.devicePixelRatioF()
+        key = (round(pw), round(ph), round(float(opts.zoom), 3),
+               round(float(opts.blur_sigma), 1), round(float(opts.bg_brightness), 2), dpr)
+        cached = self._frame_cache.get(key)
+        if cached is None:
+            tw, th = max(1, int(pw * dpr)), max(1, int(ph * dpr))
+            canvas = QImage(tw, th, QImage.Format_ARGB32_Premultiplied)
+            canvas.fill(QColor("#000000"))
+            p = QPainter(canvas)
+            p.setRenderHint(QPainter.SmoothPixmapTransform)
+            # Fundo: reduz muito e amplia de volta = desfoque barato.
+            sigma = max(4.0, float(opts.blur_sigma))
+            small_w = max(4, int(tw / (sigma * 0.9)))
+            bg = frame.scaled(
+                small_w, max(4, int(small_w * th / tw)),
+                Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation,
+            ).scaled(tw, th, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+            p.drawImage(
+                (tw - bg.width()) // 2, (th - bg.height()) // 2, bg
+            )
+            bright = float(opts.bg_brightness)
+            if bright < 0:
+                p.fillRect(0, 0, tw, th, QColor(0, 0, 0, int(min(1.0, -bright * 2.2) * 255)))
+            elif bright > 0:
+                p.fillRect(0, 0, tw, th, QColor(255, 255, 255, int(min(1.0, bright * 1.6) * 255)))
+            # Video principal: cabe na largura e aplica o zoom, centralizado.
+            fw = tw * max(0.2, float(opts.zoom))
+            fh = fw * frame.height() / max(1, frame.width())
+            if fh > th * max(1.0, float(opts.zoom)):
+                fh = th * max(1.0, float(opts.zoom))
+                fw = fh * frame.width() / max(1, frame.height())
+            fg = frame.scaled(int(fw), int(fh), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            p.drawImage(int((tw - fg.width()) / 2), int((th - fg.height()) / 2), fg)
+            p.end()
+            cached = canvas
+            self._frame_cache = {key: cached}
+        painter.drawImage(rect, cached)
 
     def paintEvent(self, _event):  # noqa: N802
         opts = self._options
@@ -416,6 +470,19 @@ class PhonePreviewWidget(QWidget):
                 min(255, int(c.blue() * bright)),
                 c.alpha(),
             )
+
+        if self._frame is not None:
+            self._paint_frame(painter, phone_rect, opts)
+            shade = QLinearGradient(0, py + ph * 0.45, 0, py + ph)
+            shade.setColorAt(0.0, QColor(0, 0, 0, 0))
+            shade.setColorAt(1.0, QColor(0, 0, 0, 120))
+            painter.fillRect(phone_rect, shade)
+            self._draw_caption(painter, phone_rect, opts)
+            painter.restore()
+            painter.setPen(QPen(QColor(theme.LINE_STRONG), 1.2))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawPath(phone_path)
+            return
 
         bg_grad = QLinearGradient(
             phone_rect.topLeft(), phone_rect.bottomLeft()

@@ -303,7 +303,27 @@ class ProjectAccordionItem(QFrame):
                     )
                 )
 
-        row.addLayout(left)
+        top = QHBoxLayout()
+        top.setSpacing(12)
+        if file_exists:
+            thumb = QPushButton(f"#{index + 1}")
+            thumb.setObjectName("ResultMedia")
+            thumb.setFixedSize(54, 96)
+            thumb.setCursor(Qt.PointingHandCursor)
+            thumb.setToolTip(f"Assistir {file_path}")
+            thumb.clicked.connect(
+                lambda _=False, p=file_path: QDesktopServices.openUrl(
+                    QUrl.fromLocalFile(str(p))
+                )
+            )
+            host = self.window()
+            if hasattr(host, "request_clip_thumb"):
+                host.request_clip_thumb(thumb, file_path, f"#{index + 1}")
+            else:
+                self._request_thumb(thumb, file_path, f"#{index + 1}")
+            top.addWidget(thumb, 0, Qt.AlignTop)
+        top.addLayout(left, 1)
+        row.addLayout(top)
 
         actions = QHBoxLayout()
         actions.setSpacing(6)
@@ -356,6 +376,35 @@ class ProjectAccordionItem(QFrame):
 
         row.addLayout(actions)
         return card
+
+    def _request_thumb(self, button, clip_path: str, label_text: str):
+        """Fallback quando o dialogo roda sozinho (sem a janela principal)."""
+        from gui.thumbnails import FrameLoader, poster_pixmap
+        from PySide6.QtGui import QIcon
+
+        loader = getattr(self, "_frames", None)
+        if loader is None:
+            loader = self._frames = FrameLoader(self)
+            self._thumb_targets = {}
+
+            def done(key, jpg):
+                for b, text in self._thumb_targets.pop(key, []):
+                    if not jpg:
+                        continue
+                    try:
+                        b.setIcon(QIcon(poster_pixmap(
+                            jpg, b.width(), b.height(), text, b.devicePixelRatioF()
+                        )))
+                        b.setIconSize(b.size())
+                        b.setText("")
+                    except RuntimeError:
+                        pass
+
+            loader.loaded.connect(done)
+        self._thumb_targets.setdefault("clip:" + clip_path, []).append(
+            (button, label_text)
+        )
+        loader.request_clip_thumb(clip_path)
 
     def _on_toggle_published(
         self,
