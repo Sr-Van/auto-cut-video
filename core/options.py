@@ -59,6 +59,25 @@ class ProcessingOptions:
     caption_animation: str = "pop"
     # Efeito glow (brilho difuso em volta do texto)
     caption_glow: bool = False
+    caption_glow_color: str = "#FFFFFF"
+    # Raio do brilho (\blur do libass); 6 = halo padrao.
+    caption_glow_strength: int = 6
+    caption_italic: bool = False
+    # Profundidade da sombra (px). Sem contorno, vira sombra suave translucida.
+    caption_shadow: int = 1
+    # "active" = so a palavra falada destaca; "cumulative" = karaoke, a palavra
+    # acende quando falada e continua acesa ate o fim do bloco.
+    caption_karaoke_mode: str = "active"
+    # "line" = linhas centralizadas; "stairs" = uma palavra por degrau,
+    # encavaladas e deslocadas em diagonal.
+    caption_layout: str = "line"
+    # Visual das palavras ainda nao faladas no modo cumulativo.
+    caption_upcoming_color: str = "#FFFFFF"
+    caption_upcoming_opacity: float = 1.0
+    # Enfase semantica: a palavra-chave de cada bloco ganha cor e escala.
+    caption_emphasis: bool = False
+    caption_emphasis_color: str = "#22C55E"
+    caption_emphasis_scale: float = 1.0
 
     # --- Formato do short (core/layouts.py) e itens auxiliares ---
     layout_id: str = "center"
@@ -129,9 +148,23 @@ class ProcessingOptions:
         )
         if self.caption_animation in ("rise", "rise_swing"):
             self.caption_animation = "rise"
-        elif self.caption_animation != "pop":
+        elif self.caption_animation not in ("pop", "blur_in", "drop"):
             self.caption_animation = "pop"
         self.caption_glow = bool(self.caption_glow)
+        self.caption_glow_strength = max(0, min(30, int(self.caption_glow_strength or 0)))
+        self.caption_italic = bool(self.caption_italic)
+        self.caption_shadow = max(0, min(12, int(self.caption_shadow or 0)))
+        if self.caption_layout not in ("line", "stairs"):
+            self.caption_layout = "line"
+        if self.caption_karaoke_mode not in ("active", "cumulative"):
+            self.caption_karaoke_mode = "active"
+        self.caption_upcoming_opacity = max(
+            0.0, min(1.0, float(self.caption_upcoming_opacity))
+        )
+        self.caption_emphasis = bool(self.caption_emphasis)
+        self.caption_emphasis_scale = max(
+            0.5, min(2.5, float(self.caption_emphasis_scale or 1.0))
+        )
         from core.layouts import LAYOUTS, TEXT_SOURCES
 
         if self.layout_id not in LAYOUTS:

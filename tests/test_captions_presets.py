@@ -5,10 +5,13 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QRect, Qt
+from PySide6.QtGui import QPainter, QPixmap
+from PySide6.QtWidgets import QApplication, QStyle, QStyleOptionViewItem
 
 from core.captions import (
     PRESETS,
+    RECOMMENDED_FONTS,
     VIRAL_PRESETS,
     CaptionBlock,
     CaptionPreset,
@@ -22,7 +25,13 @@ from core.captions import (
 )
 from core.options import ProcessingOptions
 from gui.settings_dialog import SettingsDialog
-from gui.widgets import CollapsibleBox, PhonePreviewWidget, PresetGrid
+from gui.widgets import (
+    CollapsibleBox,
+    FontComboBox,
+    FontPreviewDelegate,
+    PhonePreviewWidget,
+    PresetGrid,
+)
 
 
 class TestCaptionsPresets(unittest.TestCase):
@@ -41,9 +50,13 @@ class TestCaptionsPresets(unittest.TestCase):
             "impact_glow",
             "stronda_red_box",
             "clean_minimal",
+            "capcut_revelado",
+            "capcut_glow_word",
+            "capcut_keyword",
+            "capcut_keyword_neon",
         }
         self.assertEqual(set(VIRAL_PRESETS.keys()), expected_ids)
-        self.assertEqual(len(PRESETS), 9)
+        self.assertEqual(len(PRESETS), 13)
 
         for preset_id, preset in VIRAL_PRESETS.items():
             self.assertIsInstance(preset, CaptionPreset)
@@ -105,7 +118,10 @@ class TestCaptionsPresets(unittest.TestCase):
             if opacity > 0.01:
                 self.assertIn("Dialogue: 0,", ass_text)
                 self.assertIn(",Box,", ass_text)
-            else:
+            elif (
+                preset.settings["caption_highlight_color"].upper()
+                != preset.settings["caption_text_color"].upper()
+            ):
                 self.assertNotIn(",Box,", ass_text)
                 self.assertIn("Dialogue: 2,", ass_text)
                 self.assertIn(",ActiveWord,", ass_text)
@@ -195,7 +211,7 @@ class TestCaptionsPresets(unittest.TestCase):
 
     def test_gui_widgets_and_settings_dialog_integration(self) -> None:
         grid = PresetGrid(VIRAL_PRESETS)
-        self.assertEqual(len(grid.cards), 9)
+        self.assertEqual(len(grid.cards), 13)
 
         box = CollapsibleBox("Configurações Avançadas", expanded=False)
         self.assertFalse(box.is_expanded())
@@ -224,6 +240,131 @@ class TestCaptionsPresets(unittest.TestCase):
         preview = PhonePreviewWidget(phone_width=196)
         preview.set_options(dialog._draft_options())
         preview.grab()
+
+    def test_font_combo_preview_delegate_and_hover(self) -> None:
+        opts = ProcessingOptions(caption_font="Arial", captions_enabled=True)
+        dialog = SettingsDialog(opts, embedded=True)
+        self.assertIsInstance(dialog.caption_font, FontComboBox)
+        self.assertIsInstance(dialog.layout_text_font, FontComboBox)
+        self.assertIsInstance(
+            dialog.caption_font.itemDelegate(), FontPreviewDelegate
+        )
+
+        combo = dialog.caption_font
+        delegate = combo.itemDelegate()
+        model = combo.model()
+
+        # Cabeçalho "Recomendadas" no topo + seção de outras fontes abaixo
+        hdr_idx = model.index(0, 0)
+        self.assertEqual(
+            hdr_idx.data(Qt.AccessibleDescriptionRole), "section_header"
+        )
+        self.assertEqual(hdr_idx.data(Qt.DisplayRole), "Recomendadas")
+        self.assertEqual(hdr_idx.flags(), Qt.NoItemFlags)
+        self.assertEqual(
+            delegate.sizeHint(QStyleOptionViewItem(), hdr_idx).height(),
+            FontPreviewDelegate.HEADER_HEIGHT,
+        )
+
+        other_hdr_row = next(
+            (
+                r
+                for r in range(1, combo.count())
+                if model.index(r, 0).data(Qt.AccessibleDescriptionRole)
+                == "section_header"
+            ),
+            None,
+        )
+        self.assertIsNotNone(other_hdr_row)
+        self.assertEqual(
+            model.index(other_hdr_row, 0).data(Qt.DisplayRole),
+            "Outras fontes do sistema",
+        )
+
+        # Fontes recomendadas ficam no bloco superior e sem duplicatas no combo
+        rec_items = [combo.itemData(r) for r in range(1, other_hdr_row)]
+        other_items = [
+            combo.itemData(r)
+            for r in range(other_hdr_row + 1, combo.count())
+            if combo.itemData(r)
+        ]
+        self.assertGreater(len(rec_items), 0)
+        for name in rec_items:
+            self.assertIn(name, RECOMMENDED_FONTS)
+        for excluded in ("Arial", "Segoe UI", "Verdana"):
+            self.assertNotIn(excluded, rec_items)
+            self.assertNotIn(excluded, RECOMMENDED_FONTS)
+        for bundled in (
+            "Inter",
+            "Montserrat",
+            "Poppins",
+            "Lato",
+            "Fira Sans",
+            "Bebas Neue",
+            "EB Garamond",
+            "Bodoni Moda",
+        ):
+            self.assertIn(bundled, rec_items)
+            resolved = find_font_path(bundled)
+            self.assertIsNotNone(resolved)
+            self.assertTrue(Path(resolved).exists())
+        self.assertIn("Arial", other_items)
+        all_fonts = [
+            combo.itemData(r)
+            for r in range(combo.count())
+            if combo.itemData(r)
+        ]
+        self.assertEqual(len(all_fonts), len({f.lower() for f in all_fonts}))
+
+        # SizeHint para linha de fonte
+        font_idx = model.index(1, 0)
+        self.assertEqual(
+            delegate.sizeHint(QStyleOptionViewItem(), font_idx).height(),
+            FontPreviewDelegate.ROW_HEIGHT,
+        )
+
+        # Pintura do delegate (cabeçalho, normal, selecionado e hover) sem erros
+        pixmap = QPixmap(340, 60)
+        painter = QPainter(pixmap)
+        try:
+            opt = QStyleOptionViewItem()
+            opt.rect = QRect(0, 0, 320, FontPreviewDelegate.HEADER_HEIGHT)
+            delegate.paint(painter, opt, hdr_idx)
+            delegate.paint(painter, opt, model.index(other_hdr_row, 0))
+            opt.rect = QRect(0, 0, 320, FontPreviewDelegate.ROW_HEIGHT)
+            delegate.paint(painter, opt, font_idx)
+            opt.state |= QStyle.State_Selected
+            delegate.paint(painter, opt, font_idx)
+            opt.state = QStyle.State_MouseOver
+            delegate.paint(painter, opt, font_idx)
+        finally:
+            painter.end()
+
+        # ensure_font não insere acima do cabeçalho "Recomendadas"
+        custom_idx = combo.ensure_font("MinhaFonteCustom")
+        self.assertGreater(custom_idx, 0)
+        self.assertEqual(model.index(0, 0).data(Qt.DisplayRole), "Recomendadas")
+
+        # Sincronização de maiúsculas/itálico na amostra do seletor
+        dialog.caption_uppercase.setChecked(True)
+        dialog.caption_italic.setChecked(True)
+        self.assertEqual(delegate._effective_sample(), "LEGENDA · ABC 123")
+        self.assertTrue(delegate._italic)
+
+        # Prévia transitória ao navegar na lista sem alterar options persistidas
+        impact_idx = combo.findText("Impact", Qt.MatchFixedString)
+        if impact_idx >= 0 and impact_idx != combo.currentIndex():
+            dialog.show()
+            combo.showPopup()
+            QApplication.processEvents()
+            self.assertGreaterEqual(combo.view().width(), 320)
+            combo.highlighted.emit(impact_idx)
+            self.assertEqual(dialog.preview_widget._options.caption_font, "Impact")
+            self.assertEqual(dialog.options.caption_font, "Arial")
+            combo.hidePopup()
+            QApplication.processEvents()
+            self.assertEqual(dialog.preview_widget._options.caption_font, "Arial")
+            dialog.close()
 
 
 if __name__ == "__main__":

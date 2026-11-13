@@ -109,10 +109,20 @@ def _write_clip_captions(words, options: ProcessingOptions, tmp_dir: str) -> str
     ass_path = os.path.join(tmp_dir, "captions.ass")
     captions.write_ass(words, ass_path, options, options.width, options.height)
 
+    from core.captions.fonts import bundled_font_files
+
+    font_files = set(bundled_font_files())
     font_file = captions.find_font_path(options.caption_font, options.caption_bold)
     if font_file:
+        font_files.add(font_file)
+    italic = captions.find_font_path(
+        options.caption_font, options.caption_bold, True
+    ) if getattr(options, "caption_italic", False) else None
+    if italic:
+        font_files.add(italic)
+    for path in font_files:
         try:
-            shutil.copy2(font_file, tmp_dir)
+            shutil.copy2(path, tmp_dir)
         except OSError:
             pass
     return ass_path

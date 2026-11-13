@@ -12,6 +12,10 @@ class CaptionWord:
     text: str
     x: float = 0.0
     y: float = 0.0
+    # Preenchidos pelo layout: largura medida (ja com escala) e enfase.
+    width: float = 0.0
+    scale: float = 1.0
+    emphasis: bool = False
 
 
 @dataclass
