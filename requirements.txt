@@ -3,3 +3,4 @@ opencv-python
 faster-whisper
 httpx
 python-dotenv
+yt-dlp[default]>=2026.10.26

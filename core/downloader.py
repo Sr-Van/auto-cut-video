@@ -1,6 +1,8 @@
 from pathlib import Path
 from threading import Event
 
+import os
+
 import yt_dlp
 
 from core.config import BASE_DIR
@@ -57,16 +59,33 @@ def download_video(
         "progress_hooks": [_progress_hook],
     }
 
+    last_error: Exception | None = None
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print(f"Extraindo informações e baixando: {url}...")
-            info_dict = ydl.extract_info(url, download=True)
+        for cookie_opts in _cookie_strategies():
             check_cancelled(cancel_event)
+            try:
+                with yt_dlp.YoutubeDL({**ydl_opts, **cookie_opts}) as ydl:
+                    print(f"Extraindo informações e baixando: {url}... {cookie_opts or ''}")
+                    info_dict = ydl.extract_info(url, download=True)
+                    check_cancelled(cancel_event)
 
-            caminho_arquivo = ydl.prepare_filename(info_dict)
-            caminho_arquivo = caminho_arquivo.rsplit(".", 1)[0] + ".mp4"
-            print("caminho definido do arquivo: ", caminho_arquivo)
-            return caminho_arquivo
+                    caminho_arquivo = ydl.prepare_filename(info_dict)
+                    caminho_arquivo = caminho_arquivo.rsplit(".", 1)[0] + ".mp4"
+                    _safe_print(f"caminho definido do arquivo: {caminho_arquivo}")
+                    return caminho_arquivo
+            except PipelineCancelledError:
+                raise
+            except Exception as e:
+                if cancel_event is not None and cancel_event.is_set():
+                    raise
+                last_error = e
+                if not _is_auth_error(e) and cookie_opts:
+                    # falha ao ler cookies do navegador (ex.: nao instalado) -> tenta o proximo
+                    continue
+                if not _is_auth_error(e):
+                    raise
+                print("YouTube pediu autenticacao; tentando com cookies...")
+        raise last_error or RuntimeError("Falha ao baixar o video")
     except PipelineCancelledError:
         _cleanup_partials(partial_files, diretorio_saida)
         raise
@@ -74,8 +93,40 @@ def download_video(
         if cancel_event is not None and cancel_event.is_set():
             _cleanup_partials(partial_files, diretorio_saida)
             raise PipelineCancelledError() from e
-        print(f"Erro ao baixar o vídeo: {e}")
+        _safe_print(f"Erro ao baixar o vídeo: {e}")
         return None
+
+
+COOKIES_FILE = BASE_DIR / "cookies.txt"
+_BROWSERS = ("chrome", "firefox", "edge", "brave", "opera", "chromium")
+
+
+def _safe_print(msg: str) -> None:
+    try:
+        print(msg)
+    except UnicodeEncodeError:
+        print(msg.encode("ascii", "replace").decode("ascii"))
+
+
+def _is_auth_error(e: Exception) -> bool:
+    msg = str(e).lower()
+    return "sign in" in msg or "not a bot" in msg or "cookies" in msg or "login" in msg
+
+
+def _cookie_strategies():
+    """Sem cookies primeiro; depois cookies.txt; depois cookies dos navegadores.
+
+    Pode-se forcar via env: YTDLP_COOKIES=<arquivo> ou YTDLP_BROWSER=<navegador>.
+    """
+    yield {}
+    env_file = os.environ.get("YTDLP_COOKIES")
+    for f in (env_file, COOKIES_FILE):
+        if f and Path(f).is_file():
+            yield {"cookiefile": str(f)}
+    env_browser = os.environ.get("YTDLP_BROWSER")
+    browsers = (env_browser,) if env_browser else _BROWSERS
+    for b in browsers:
+        yield {"cookiesfrombrowser": (b,)}
 
 
 def _cleanup_partials(partial_files: set[str], diretorio_saida: str) -> None:
