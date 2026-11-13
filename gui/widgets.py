@@ -20,15 +20,21 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QStandardItem,
 )
 from PySide6.QtWidgets import (
     QAbstractButton,
+    QAbstractItemView,
     QButtonGroup,
+    QComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListView,
     QPushButton,
+    QStyle,
+    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
@@ -685,6 +691,18 @@ class PhonePreviewWidget(QWidget):
 
         # mesma regra do render: o formato decide tamanho e posicao
         opts = caption_options(opts)
+        try:
+            from gui.caption_preview import draw_caption
+
+            alpha = (
+                1.0
+                if opts.captions_enabled
+                else (0.50 if self._in_settings else 0.22)
+            )
+            draw_caption(painter, phone_rect, opts, SAMPLE_WORDS, alpha)
+            return
+        except Exception:
+            pass  # cai no desenho aproximado abaixo
         px, py, pw, ph = (
             phone_rect.x(),
             phone_rect.y(),
@@ -1145,3 +1163,264 @@ class CollapsibleBox(QWidget):
         arrow = "▾" if self._expanded else "▸"
         self.toggle_button.setText(f"{arrow}   {self._title}")
         self.content_area.setVisible(self._expanded)
+
+
+class FontPreviewDelegate(QStyledItemDelegate):
+    """Delegate que exibe o nome da fonte e uma amostra visual no dropdown."""
+
+    ROW_HEIGHT = 48
+    HEADER_HEIGHT = 28
+    SEPARATOR_HEIGHT = 10
+    SAMPLE_DEFAULT = "Legenda · ABC 123"
+    HEADER_ACCENT_ROLE = Qt.UserRole + 1
+
+    def __init__(
+        self,
+        combo: QComboBox | None = None,
+        sample_text: str = SAMPLE_DEFAULT,
+        bold: bool = True,
+        parent=None,
+    ):
+        super().__init__(parent or combo)
+        self._combo = combo
+        self._sample_text = sample_text or self.SAMPLE_DEFAULT
+        self._bold = bool(bold)
+        self._italic = False
+        self._uppercase = False
+
+    def set_uppercase(self, uppercase: bool) -> None:
+        self._uppercase = bool(uppercase)
+
+    def set_italic(self, italic: bool) -> None:
+        self._italic = bool(italic)
+
+    def set_sample_text(self, text: str) -> None:
+        self._sample_text = text or self.SAMPLE_DEFAULT
+
+    def _effective_sample(self) -> str:
+        return self._sample_text.upper() if self._uppercase else self._sample_text
+
+    @staticmethod
+    def _is_separator(index) -> bool:
+        return index.data(Qt.AccessibleDescriptionRole) == "separator"
+
+    @staticmethod
+    def _is_section_header(index) -> bool:
+        return index.data(Qt.AccessibleDescriptionRole) == "section_header"
+
+    def sizeHint(self, option, index) -> QSize:  # noqa: N802
+        width = max(240, option.rect.width())
+        if self._is_section_header(index):
+            return QSize(width, self.HEADER_HEIGHT)
+        if self._is_separator(index):
+            return QSize(width, self.SEPARATOR_HEIGHT)
+        return QSize(width, self.ROW_HEIGHT)
+
+    def paint(self, painter: QPainter, option, index) -> None:  # noqa: N802
+        if self._is_section_header(index):
+            painter.save()
+            painter.setRenderHint(QPainter.TextAntialiasing)
+            rect = QRectF(option.rect)
+            painter.setClipRect(rect)
+            top_pad = 4.0
+            if index.row() > 0:
+                painter.setPen(QPen(QColor(theme.LINE_STRONG), 1))
+                painter.drawLine(
+                    QPointF(rect.left() + 8, rect.top() + 3),
+                    QPointF(rect.right() - 8, rect.top() + 3),
+                )
+                top_pad = 7.0
+            accent = bool(index.data(self.HEADER_ACCENT_ROLE))
+            title = str(index.data(Qt.DisplayRole) or "").strip()
+            hdr_font = QFont(option.font)
+            hdr_font.setPixelSize(10)
+            hdr_font.setWeight(QFont.DemiBold)
+            hdr_font.setLetterSpacing(QFont.AbsoluteSpacing, 0.8)
+            painter.setFont(hdr_font)
+            painter.setPen(
+                QColor(theme.ACCENT_TEXT if accent else theme.FAINT)
+            )
+            text_rect = rect.adjusted(10, top_pad, -10, -2)
+            painter.drawText(
+                text_rect, Qt.AlignLeft | Qt.AlignVCenter, title.upper()
+            )
+            painter.restore()
+            return
+
+        if self._is_separator(index):
+            painter.save()
+            y = option.rect.center().y()
+            painter.setPen(QPen(QColor(theme.LINE_STRONG), 1))
+            painter.drawLine(option.rect.left() + 8, y, option.rect.right() - 8, y)
+            painter.restore()
+            return
+
+        font_name = str(index.data(Qt.DisplayRole) or "").strip()
+        is_selected = bool(option.state & QStyle.State_Selected)
+        is_hovered = bool(option.state & QStyle.State_MouseOver)
+        is_current = (
+            self._combo is not None and index.row() == self._combo.currentIndex()
+        )
+
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.TextAntialiasing)
+
+        row_rect = QRectF(option.rect).adjusted(2, 1, -2, -1)
+        painter.setClipRect(option.rect)
+
+        if is_selected:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(theme.ACCENT))
+            painter.drawRoundedRect(row_rect, 5, 5)
+            name_color = QColor(theme.ON_ACCENT)
+            name_color.setAlpha(215)
+            sample_color = QColor(theme.ON_ACCENT)
+        elif is_hovered:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(theme.PANEL_3))
+            painter.drawRoundedRect(row_rect, 5, 5)
+            name_color = QColor(theme.ACCENT_TEXT if is_current else theme.MUTED)
+            sample_color = QColor(theme.TEXT)
+        elif is_current:
+            painter.setPen(Qt.NoPen)
+            painter.setBrush(QColor(theme.ACCENT_SOFT))
+            painter.drawRoundedRect(row_rect, 5, 5)
+            name_color = QColor(theme.ACCENT_TEXT)
+            sample_color = QColor(theme.TEXT)
+        else:
+            name_color = QColor(theme.MUTED)
+            sample_color = QColor(theme.TEXT)
+
+        inner = row_rect.adjusted(10, 4, -10, -4)
+        top_rect = QRectF(inner.left(), inner.top(), inner.width(), 15)
+        bottom_rect = QRectF(
+            inner.left(), inner.top() + 16, inner.width(), inner.height() - 16
+        )
+
+        # Linha 1: nome legível da fonte na tipografia da UI
+        name_font = QFont(option.font)
+        name_font.setPixelSize(11)
+        name_font.setWeight(
+            QFont.DemiBold if (is_current or is_selected) else QFont.Medium
+        )
+        painter.setFont(name_font)
+        fm_name = QFontMetricsF(name_font)
+
+        badge_w = 0.0
+        if is_current:
+            badge_text = "Atual"
+            badge_w = fm_name.horizontalAdvance(badge_text) + 10
+            painter.setPen(name_color)
+            painter.drawText(top_rect, Qt.AlignRight | Qt.AlignVCenter, badge_text)
+
+        elided_name = fm_name.elidedText(
+            font_name, Qt.ElideRight, max(20.0, top_rect.width() - badge_w)
+        )
+        painter.setPen(name_color)
+        painter.drawText(top_rect, Qt.AlignLeft | Qt.AlignVCenter, elided_name)
+
+        # Linha 2: amostra real renderizada com a própria fonte selecionável
+        sample_font = QFont(font_name)
+        sample_font.setPixelSize(16)
+        sample_font.setBold(self._bold)
+        sample_font.setItalic(self._italic)
+        painter.setFont(sample_font)
+        painter.setPen(sample_color)
+        fm_sample = QFontMetricsF(sample_font)
+        sample_str = fm_sample.elidedText(
+            self._effective_sample(), Qt.ElideRight, max(20.0, bottom_rect.width())
+        )
+        painter.drawText(bottom_rect, Qt.AlignLeft | Qt.AlignVCenter, sample_str)
+
+        if not is_selected and not is_hovered:
+            painter.setPen(QPen(QColor(theme.LINE), 1))
+            painter.drawLine(
+                QPointF(row_rect.left() + 8, option.rect.bottom()),
+                QPointF(row_rect.right() - 8, option.rect.bottom()),
+            )
+
+        painter.restore()
+
+
+class FontComboBox(QComboBox):
+    """Seletor de fonte com amostra visual de cada opção na lista suspensa."""
+
+    popup_closed = Signal()
+
+    def __init__(
+        self,
+        sample_text: str = FontPreviewDelegate.SAMPLE_DEFAULT,
+        bold: bool = True,
+        min_popup_width: int = 320,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self._min_popup_width = int(min_popup_width)
+        self.setEditable(False)
+        self.setMaxVisibleItems(10)
+        self.setStyleSheet("QComboBox { combobox-popup: 0; }")
+
+        view = QListView(self)
+        view.setUniformItemSizes(False)
+        view.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        view.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        view.setMouseTracking(True)
+        self.setView(view)
+
+        self._delegate = FontPreviewDelegate(
+            combo=self, sample_text=sample_text, bold=bold, parent=self
+        )
+        self.setItemDelegate(self._delegate)
+
+    def add_section_header(self, title: str, accent: bool = False) -> None:
+        item = QStandardItem(title)
+        item.setFlags(Qt.NoItemFlags)
+        item.setData("section_header", Qt.AccessibleDescriptionRole)
+        item.setData(bool(accent), FontPreviewDelegate.HEADER_ACCENT_ROLE)
+        self.model().appendRow(item)
+
+    def select_first_font(self) -> None:
+        for idx in range(self.count()):
+            if self.itemData(idx):
+                self.setCurrentIndex(idx)
+                return
+
+    def ensure_font(self, font_name: str) -> int:
+        name = (font_name or "Arial").strip()
+        for idx in range(self.count()):
+            data = self.itemData(idx)
+            if isinstance(data, str) and data.lower() == name.lower():
+                return idx
+        self.addItem(name, name)
+        return self.count() - 1
+
+    def set_uppercase(self, uppercase: bool) -> None:
+        self._delegate.set_uppercase(uppercase)
+        if self.view().isVisible():
+            self.view().viewport().update()
+
+    def set_italic(self, italic: bool) -> None:
+        self._delegate.set_italic(italic)
+        if self.view().isVisible():
+            self.view().viewport().update()
+
+    def showPopup(self) -> None:  # noqa: N802
+        view = self.view()
+        view.setMinimumWidth(max(self.width(), self._min_popup_width))
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        rows = min(self.count(), max(1, self.maxVisibleItems()))
+        if self.count() > 0:
+            height = sum(max(8, view.sizeHintForRow(i)) for i in range(rows)) + 10
+        else:
+            height = FontPreviewDelegate.ROW_HEIGHT + 10
+        view.setMaximumHeight(height)
+        if view.parentWidget() is not None:
+            view.parentWidget().setMaximumHeight(height + 2)
+        super().showPopup()
+        view.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+    def hidePopup(self) -> None:  # noqa: N802
+        super().hidePopup()
+        self.popup_closed.emit()

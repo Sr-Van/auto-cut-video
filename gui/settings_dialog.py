@@ -29,19 +29,21 @@ from PySide6.QtWidgets import (
 )
 
 from core.captions import (
-    PRECONFIGURED_FONTS,
     PRESETS,
+    RECOMMENDED_FONTS,
     VIRAL_PRESETS,
     apply_preset,
     detect_active_preset,
     list_available_fonts,
 )
+from core.captions.fonts import register_bundled_fonts
 from core.options import ProcessingOptions
 from gui import theme
 from core.layouts import LAYOUTS, get_layout
 from gui.widgets import (
-    LayoutGrid,
     CollapsibleBox,
+    FontComboBox,
+    LayoutGrid,
     PhonePreviewWidget,
     PresetGrid,
     Switch,
@@ -378,9 +380,7 @@ class SettingsDialog(QDialog):
         self.caption_preset.addItems(list(PRESETS.keys()))
         self.caption_preset.setVisible(False)
 
-        self.caption_font = QComboBox()
-        self.caption_font.setEditable(False)
-        self.caption_font.setMaxVisibleItems(16)
+        self.caption_font = FontComboBox()
         self._populate_font_combo()
         grid.addWidget(_field_box("Fonte", self.caption_font), 0, 0)
 
@@ -488,8 +488,71 @@ class SettingsDialog(QDialog):
         self.caption_animation = QComboBox()
         self.caption_animation.addItem("Pop / Padrão", "pop")
         self.caption_animation.addItem("Subir e Aparecer (Rise)", "rise")
+        self.caption_animation.addItem("Borrão rápido (Blur-in)", "blur_in")
+        self.caption_animation.addItem("Cair de cima (Drop)", "drop")
         grid.addWidget(
             _field_box("Animação de entrada", self.caption_animation), 7, 0
+        )
+
+        self.caption_shadow = QSpinBox()
+        self.caption_shadow.setRange(0, 12)
+        grid.addWidget(_field_box("Sombra", self.caption_shadow, "px"), 7, 1)
+
+        self.caption_karaoke_mode = QComboBox()
+        self.caption_karaoke_mode.addItem("Só a palavra ativa", "active")
+        self.caption_karaoke_mode.addItem("Karaokê (acende e fica)", "cumulative")
+        grid.addWidget(
+            _field_box("Destaque da fala", self.caption_karaoke_mode), 8, 0
+        )
+
+        self.caption_layout = QComboBox()
+        self.caption_layout.addItem("Linhas centralizadas", "line")
+        self.caption_layout.addItem("Escada (uma palavra por degrau)", "stairs")
+        grid.addWidget(_field_box("Disposição", self.caption_layout), 11, 1)
+
+        self.caption_upcoming_color = ColorButton()
+        grid.addWidget(
+            _field_box("Cor das palavras futuras", self.caption_upcoming_color),
+            8,
+            1,
+        )
+
+        self.caption_upcoming_opacity = QDoubleSpinBox()
+        self.caption_upcoming_opacity.setRange(0.0, 1.0)
+        self.caption_upcoming_opacity.setSingleStep(0.05)
+        self.caption_upcoming_opacity.setDecimals(2)
+        grid.addWidget(
+            _field_box(
+                "Opacidade das futuras", self.caption_upcoming_opacity, "0 – 1"
+            ),
+            9,
+            0,
+        )
+
+        self.caption_glow_color = ColorButton()
+        grid.addWidget(_field_box("Cor do glow", self.caption_glow_color), 9, 1)
+
+        self.caption_glow_strength = QSpinBox()
+        self.caption_glow_strength.setRange(0, 30)
+        grid.addWidget(
+            _field_box("Intensidade do glow", self.caption_glow_strength), 10, 0
+        )
+
+        self.caption_emphasis_color = ColorButton()
+        grid.addWidget(
+            _field_box("Cor da palavra-chave", self.caption_emphasis_color), 10, 1
+        )
+
+        self.caption_emphasis_scale = QDoubleSpinBox()
+        self.caption_emphasis_scale.setRange(0.5, 2.5)
+        self.caption_emphasis_scale.setSingleStep(0.05)
+        self.caption_emphasis_scale.setDecimals(2)
+        grid.addWidget(
+            _field_box(
+                "Escala da palavra-chave", self.caption_emphasis_scale, "0.5 – 2.5"
+            ),
+            11,
+            0,
         )
 
         self.advanced_box.set_content_layout(grid)
@@ -500,6 +563,10 @@ class SettingsDialog(QDialog):
         toggles.addWidget(self.caption_uppercase)
         self.caption_glow = Switch("Efeito Glow (halo)")
         toggles.addWidget(self.caption_glow)
+        self.caption_italic = Switch("Itálico")
+        toggles.addWidget(self.caption_italic)
+        self.caption_emphasis = Switch("Destacar palavra-chave")
+        toggles.addWidget(self.caption_emphasis)
         toggles.addStretch(1)
         self.advanced_box.set_content_layout(toggles)
 
@@ -570,8 +637,9 @@ class SettingsDialog(QDialog):
         tgrid.addWidget(_field_box("Cor da faixa", self.layout_band_color), 1, 0)
         self.layout_text_color = ColorButton("#FFFFFF")
         tgrid.addWidget(_field_box("Cor do texto", self.layout_text_color), 1, 1)
-        self.layout_text_font = QComboBox()
-        self.layout_text_font.setMaxVisibleItems(16)
+        self.layout_text_font = FontComboBox(
+            sample_text="Texto da faixa · ABC 123"
+        )
         self._populate_font_combo(self.layout_text_font)
         tgrid.addWidget(_field_box("Fonte da faixa", self.layout_text_font), 2, 0)
         switches = QVBoxLayout()
@@ -831,19 +899,43 @@ class SettingsDialog(QDialog):
             for f in QFontDatabase.families()
             if f and not f.startswith("@")
         ]
+        qt_lower = {f.lower() for f in qt_families}
+        bundled_required = {
+            "poppins",
+            "montserrat",
+            "inter",
+            "lato",
+            "fira sans",
+            "bebas neue",
+            "eb garamond",
+            "bodoni moda",
+        }
+        if not bundled_required <= qt_lower:
+            if register_bundled_fonts() > 0:
+                qt_families = [
+                    f.strip()
+                    for f in QFontDatabase.families()
+                    if f and not f.startswith("@")
+                ]
+
         discovered = list_available_fonts()
         seen: set[str] = set()
-        preconfigured: list[str] = []
+        recommended: list[str] = []
         system_fonts: list[str] = []
 
         qt_lookup = {f.lower(): f for f in qt_families}
         disc_lookup = {f.lower(): f for f in discovered}
 
-        for name in PRECONFIGURED_FONTS:
+        for name in RECOMMENDED_FONTS:
             key = name.lower()
             if key in qt_lookup or key in disc_lookup:
                 seen.add(key)
-                preconfigured.append(name)
+                recommended.append(name)
+
+        if not recommended:
+            for name in RECOMMENDED_FONTS[:6]:
+                seen.add(name.lower())
+                recommended.append(name)
 
         merged_system = sorted(
             set(qt_families) | set(discovered), key=str.casefold
@@ -855,12 +947,19 @@ class SettingsDialog(QDialog):
                 system_fonts.append(name)
 
         combo.clear()
-        for name in preconfigured or list(PRECONFIGURED_FONTS):
+        if isinstance(combo, FontComboBox):
+            combo.add_section_header("Recomendadas", accent=True)
+        for name in recommended:
             combo.addItem(name, name)
         if system_fonts:
-            combo.insertSeparator(combo.count())
+            if isinstance(combo, FontComboBox):
+                combo.add_section_header("Outras fontes do sistema", accent=False)
+            else:
+                combo.insertSeparator(combo.count())
             for name in system_fonts:
                 combo.addItem(name, name)
+        if isinstance(combo, FontComboBox):
+            combo.select_first_font()
 
     def _connect_live_preview(self):
         for spin in (
@@ -877,6 +976,10 @@ class SettingsDialog(QDialog):
             self.caption_max_words_per_line,
             self.caption_max_lines,
             self.caption_margin_bottom,
+            self.caption_shadow,
+            self.caption_upcoming_opacity,
+            self.caption_glow_strength,
+            self.caption_emphasis_scale,
             self.max_clips,
             self.min_viral_score,
             self.min_clip_duration,
@@ -893,6 +996,8 @@ class SettingsDialog(QDialog):
             self.caption_font,
             self.caption_transcribe_mode,
             self.caption_animation,
+            self.caption_karaoke_mode,
+            self.caption_layout,
             self.whisper_model,
         ):
             combo.currentIndexChanged.connect(self._refresh_preview)
@@ -902,11 +1007,58 @@ class SettingsDialog(QDialog):
             self.caption_text_color,
             self.caption_highlight_color,
             self.caption_outline_color,
+            self.caption_upcoming_color,
+            self.caption_glow_color,
+            self.caption_emphasis_color,
         ):
             color_btn.changed.connect(self._refresh_preview)
         self.captions_enabled_toggle.toggled.connect(self._refresh_preview)
         self.caption_uppercase.toggled.connect(self._refresh_preview)
         self.caption_glow.toggled.connect(self._refresh_preview)
+        self.caption_italic.toggled.connect(self._refresh_preview)
+        self.caption_emphasis.toggled.connect(self._refresh_preview)
+        self.caption_font.highlighted.connect(self._on_caption_font_highlighted)
+        self.caption_font.popup_closed.connect(self._restore_font_preview)
+        self.layout_text_font.highlighted.connect(
+            self._on_layout_font_highlighted
+        )
+        self.layout_text_font.popup_closed.connect(self._restore_font_preview)
+
+    def _on_caption_font_highlighted(self, index: int):
+        if not self.caption_font.view().isVisible():
+            return
+        font_name = self.caption_font.itemData(index)
+        if not font_name or not hasattr(self, "preview_widget"):
+            return
+        draft = self._draft_options()
+        draft.caption_font = str(font_name)
+        self.preview_widget.set_options(draft)
+
+    def _on_layout_font_highlighted(self, index: int):
+        if not self.layout_text_font.view().isVisible():
+            return
+        font_name = self.layout_text_font.itemData(index)
+        if not font_name or not hasattr(self, "format_preview"):
+            return
+        draft = self._draft_options()
+        draft.layout_text_font = str(font_name)
+        self.format_preview.set_options(draft)
+
+    def _restore_font_preview(self):
+        draft = self._draft_options()
+        if hasattr(self, "preview_widget"):
+            self.preview_widget.set_options(draft)
+        if hasattr(self, "format_preview"):
+            self.format_preview.set_options(draft)
+
+    def _sync_font_samples(self, options: ProcessingOptions):
+        if isinstance(self.caption_font, FontComboBox):
+            self.caption_font.set_uppercase(bool(options.caption_uppercase))
+            self.caption_font.set_italic(bool(options.caption_italic))
+        if isinstance(self.layout_text_font, FontComboBox):
+            self.layout_text_font.set_uppercase(
+                bool(options.layout_text_uppercase)
+            )
 
     def _draft_options(self) -> ProcessingOptions:
         draft = ProcessingOptions.from_dict(self.options.to_dict())
@@ -917,6 +1069,7 @@ class SettingsDialog(QDialog):
         if self._syncing_preset:
             return
         draft = self._draft_options()
+        self._sync_font_samples(draft)
         if hasattr(self, "preview_widget"):
             self.preview_widget.set_options(draft)
         if hasattr(self, "format_preview"):
@@ -967,10 +1120,13 @@ class SettingsDialog(QDialog):
     def _load_caption_fields(self, options: ProcessingOptions):
         self.captions_enabled_toggle.setChecked(options.captions_enabled)
         font_name = (options.caption_font or "Arial").strip()
-        font_idx = self.caption_font.findText(font_name, Qt.MatchFixedString)
-        if font_idx < 0:
-            self.caption_font.insertItem(0, font_name, font_name)
-            font_idx = 0
+        if isinstance(self.caption_font, FontComboBox):
+            font_idx = self.caption_font.ensure_font(font_name)
+        else:
+            font_idx = self.caption_font.findText(font_name, Qt.MatchFixedString)
+            if font_idx < 0:
+                self.caption_font.insertItem(0, font_name, font_name)
+                font_idx = 0
         self.caption_font.setCurrentIndex(font_idx)
         self.caption_font_size.setValue(options.caption_font_size)
         self.caption_text_color.set_color(options.caption_text_color)
@@ -1006,6 +1162,20 @@ class SettingsDialog(QDialog):
             if self.caption_animation.itemData(idx) == anim:
                 self.caption_animation.setCurrentIndex(idx)
                 break
+
+        self.caption_italic.setChecked(bool(options.caption_italic))
+        self.caption_shadow.setValue(int(options.caption_shadow))
+        idx = self.caption_karaoke_mode.findData(options.caption_karaoke_mode)
+        self.caption_karaoke_mode.setCurrentIndex(max(0, idx))
+        idx = self.caption_layout.findData(options.caption_layout)
+        self.caption_layout.setCurrentIndex(max(0, idx))
+        self.caption_upcoming_color.set_color(options.caption_upcoming_color)
+        self.caption_upcoming_opacity.setValue(options.caption_upcoming_opacity)
+        self.caption_glow_color.set_color(options.caption_glow_color)
+        self.caption_glow_strength.setValue(int(options.caption_glow_strength))
+        self.caption_emphasis.setChecked(bool(options.caption_emphasis))
+        self.caption_emphasis_color.set_color(options.caption_emphasis_color)
+        self.caption_emphasis_scale.setValue(options.caption_emphasis_scale)
 
     def _load(self, options: ProcessingOptions):
         self._syncing_preset = True
@@ -1064,6 +1234,7 @@ class SettingsDialog(QDialog):
                 self.whisper_model.setCurrentIndex(0)
         finally:
             self._syncing_preset = False
+        self._sync_font_samples(options)
         self._update_preset_status(options)
 
     def _apply_preset(self):
@@ -1109,6 +1280,19 @@ class SettingsDialog(QDialog):
         options.caption_margin_bottom = self.caption_margin_bottom.value()
         options.caption_uppercase = self.caption_uppercase.isChecked()
         options.caption_glow = self.caption_glow.isChecked()
+        options.caption_italic = self.caption_italic.isChecked()
+        options.caption_shadow = self.caption_shadow.value()
+        options.caption_karaoke_mode = (
+            self.caption_karaoke_mode.currentData() or "active"
+        )
+        options.caption_layout = self.caption_layout.currentData() or "line"
+        options.caption_upcoming_color = self.caption_upcoming_color.color()
+        options.caption_upcoming_opacity = self.caption_upcoming_opacity.value()
+        options.caption_glow_color = self.caption_glow_color.color()
+        options.caption_glow_strength = self.caption_glow_strength.value()
+        options.caption_emphasis = self.caption_emphasis.isChecked()
+        options.caption_emphasis_color = self.caption_emphasis_color.color()
+        options.caption_emphasis_scale = self.caption_emphasis_scale.value()
         options.caption_transcribe_mode = (
             self.caption_transcribe_mode.currentData()
             or self.caption_transcribe_mode.currentText()
