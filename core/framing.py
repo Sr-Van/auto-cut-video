@@ -28,6 +28,7 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -180,19 +181,21 @@ def scene_cuts(frames) -> list[int]:
     return cuts
 
 
-_CASCADE = None
+_CASCADE = threading.local()
 
 
 def _cascade():
-    global _CASCADE
-    if _CASCADE is None:
-        _CASCADE = cv2.CascadeClassifier(
+    cascade = getattr(_CASCADE, "clf", None)
+    if cascade is None:
+        cascade = _CASCADE.clf = cv2.CascadeClassifier(
             cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
         )
-    return _CASCADE
+    return cascade
 
 
-_YUNET = {}
+# Um detector por thread: a rede DNN do OpenCV nao e thread-safe e os
+# cortes sao analisados em paralelo (ThreadPoolExecutor em video_ops).
+_YUNET = threading.local()
 _MODEL_OK: bool | None = None
 
 
@@ -212,13 +215,16 @@ def _model_ok() -> bool:
 def _yunet(w: int, h: int):
     if not hasattr(cv2, "FaceDetectorYN") or not _model_ok():
         return None
-    det = _YUNET.get((w, h))
+    cache = getattr(_YUNET, "dets", None)
+    if cache is None:
+        cache = _YUNET.dets = {}
+    det = cache.get((w, h))
     if det is None:
         try:
             det = cv2.FaceDetectorYN.create(str(MODEL_PATH), "", (w, h), 0.6, 0.3, 50)
         except cv2.error:
             return None
-        _YUNET[(w, h)] = det
+        cache[(w, h)] = det
     return det
 
 
@@ -231,17 +237,22 @@ def detect_faces(frame) -> list[Box]:
     det = _yunet(w, h)
     if det is not None:
         bgr = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR) if frame.ndim == 2 else frame
-        _ok, found = det.detect(bgr)
-        if found is None:
-            return []
-        out = []
-        for row in found:
-            x, y, fw, fh = (float(v) for v in row[:4])
-            if fw > 2 and fh > 2:
-                out.append((max(0.0, x) / w, max(0.0, y) / h, fw / w, fh / h))
-        return out
+        try:
+            _ok, found = det.detect(bgr)
+        except cv2.error:
+            pass  # erro interno do OpenCV: usa o Haar abaixo
+        else:
+            if found is None:
+                return []
+            out = []
+            for row in found:
+                x, y, fw, fh = (float(v) for v in row[:4])
+                if fw > 2 and fh > 2:
+                    out.append((max(0.0, x) / w, max(0.0, y) / h, fw / w, fh / h))
+            return out
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     found = _cascade().detectMultiScale(
-        cv2.equalizeHist(frame), scaleFactor=1.12, minNeighbors=5,
+        cv2.equalizeHist(gray), scaleFactor=1.12, minNeighbors=5,
         minSize=(max(12, w // 28), max(12, w // 28)),
     )
     return [(x / w, y / h, fw / w, fh / h) for (x, y, fw, fh) in found]
