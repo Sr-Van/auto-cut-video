@@ -160,6 +160,32 @@ class BaseAIProvider(ABC):
     def prefers_prompt_schema(self, model: str, is_mock: bool = False) -> bool:
         return False
 
+    def fetch_models(
+        self,
+        api_key: str,
+        base_url: str | None = None,
+        client: httpx.Client | None = None,
+    ) -> tuple[str, ...]:
+        """Lista os modelos que a chave enxerga (GET /models). Vazio se falhar."""
+        url = f"{(base_url or self.default_base_url).rstrip('/')}/models"
+        try:
+            resp = (client or get_http_client()).get(
+                url, headers=self.build_headers(api_key), timeout=10.0
+            )
+            if resp.status_code != 200:
+                return ()
+            items = resp.json().get("data") or []
+        except Exception:
+            return ()
+        ids = []
+        for item in items:
+            mid = str((item or {}).get("id") or "").strip() if isinstance(item, dict) else ""
+            if mid.startswith("models/"):
+                mid = mid[len("models/"):]
+            if mid and mid not in ids:
+                ids.append(mid)
+        return tuple(ids)
+
     def post_completion(
         self,
         api_key: str,

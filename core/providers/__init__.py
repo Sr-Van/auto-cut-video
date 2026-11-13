@@ -12,6 +12,7 @@ from core.providers.base import (
 from core.providers.factory import (
     detect_provider_and_key,
     get_provider,
+    list_available_models,
     resolve_targets,
 )
 from core.providers.gemini_provider import GeminiProvider
@@ -43,6 +44,7 @@ __all__ = [
     "get_openrouter_models",
     "get_provider",
     "is_schema_unsupported",
+    "list_available_models",
     "reset_openrouter_cache",
     "resolve_targets",
     "status_code_from_exc",

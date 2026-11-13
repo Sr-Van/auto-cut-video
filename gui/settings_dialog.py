@@ -39,6 +39,7 @@ from core.captions import (
 from core.captions.fonts import register_bundled_fonts
 from core.options import ProcessingOptions
 from gui import theme
+from gui.ai_model_picker import AIModelPicker
 from core.layouts import LAYOUTS, get_layout
 from gui.widgets import (
     CollapsibleBox,
@@ -806,6 +807,19 @@ class SettingsDialog(QDialog):
             _field_box("Modelo Whisper", self.whisper_model), 0, 2
         )
 
+        self.ai_model = AIModelPicker()
+        grid1.addWidget(
+            _field_box(
+                "Modelo de IA",
+                self.ai_model,
+                "tentado primeiro; os outros ficam de reserva",
+            ),
+            1,
+            0,
+            1,
+            3,
+        )
+
         layout.addLayout(grid1)
         layout.addWidget(separator())
         layout.addWidget(label("DURAÇÃO E RECORTE", "SectionTitle"))
@@ -1003,6 +1017,7 @@ class SettingsDialog(QDialog):
             combo.currentIndexChanged.connect(self._refresh_preview)
             if combo.isEditable():
                 combo.editTextChanged.connect(self._refresh_preview)
+        self.ai_model.changed.connect(self._refresh_preview)
         for color_btn in (
             self.caption_text_color,
             self.caption_highlight_color,
@@ -1222,6 +1237,7 @@ class SettingsDialog(QDialog):
             self.padding_s.setValue(options.padding_s)
             self.max_workers.setValue(options.max_workers)
 
+            self.ai_model.set_value(options.ai_model)
             w_model = (options.whisper_model or "large").strip()
             w_found = False
             for idx in range(self.whisper_model.count()):
@@ -1322,6 +1338,7 @@ class SettingsDialog(QDialog):
         options.pause_gap = self.pause_gap.value()
         options.padding_s = self.padding_s.value()
         options.max_workers = self.max_workers.value()
+        options.ai_model = self.ai_model.value()
         options.whisper_model = (
             self.whisper_model.currentData()
             or self.whisper_model.currentText().strip()

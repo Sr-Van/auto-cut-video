@@ -55,6 +55,66 @@ def detect_provider_and_key(raw_key: str) -> tuple[str, str]:
     return detect_provider(text)
 
 
+def _preferred_model(options, provider_id: str) -> str:
+    """Modelo escolhido na GUI, se for deste provedor."""
+    choice = (getattr(options, "ai_model", "") or "").strip()
+    if ":" not in choice:
+        return ""
+    prov, model = choice.split(":", 1)
+    prov = "google" if prov.strip().lower() == "gemini" else prov.strip().lower()
+    return model.strip() if prov == provider_id and model.strip() else ""
+
+
+# Modelos que nao servem para gerar texto (filtrados da lista da GUI).
+_NON_CHAT_HINTS = (
+    "embed", "tts", "whisper", "audio", "image", "imagen", "veo", "guard",
+    "moderation", "transcribe", "realtime", "dall-e", "aqa", "learnlm", "ocr",
+)
+
+
+def list_available_models(
+    raw_keys: list[str],
+    *,
+    client: httpx.Client | None = None,
+    live: bool = True,
+) -> list[tuple[str, str, tuple[str, ...]]]:
+    """Agrupa os modelos disponiveis por provedor das chaves configuradas.
+
+    Retorna [(provider_id, nome, modelos)]. Recomendados do catalogo primeiro,
+    depois os que a API devolveu ao vivo (quando `live`).
+    """
+    seen: dict[str, tuple[str, str, str]] = {}
+    for raw in raw_keys:
+        provider_id, clean_key = detect_provider_and_key(raw)
+        if clean_key and provider_id not in seen:
+            provider_obj = get_provider(provider_id)
+            cat = PROVIDERS_CATALOG.get(provider_id)
+            base = AI_BASE_URL or (cat["base_url"] if cat else provider_obj.default_base_url)
+            seen[provider_id] = (clean_key, base, cat["name"] if cat else provider_obj.provider_name)
+
+    result = []
+    for provider_id, (key, base, name) in seen.items():
+        provider_obj = get_provider(provider_id)
+        cat = PROVIDERS_CATALOG.get(provider_id)
+        recommended = list(cat["models"] if cat else provider_obj.default_models)
+        fetched: tuple[str, ...] = ()
+        if live:
+            if provider_id == "openrouter":
+                fetched = provider_obj.get_models(base_url=base, client=client)
+            else:
+                fetched = provider_obj.fetch_models(key, base, client=client)
+        extras = sorted(
+            m for m in fetched
+            if m not in recommended and not any(h in m.lower() for h in _NON_CHAT_HINTS)
+        )
+        if fetched:
+            # recomendados que a chave nao enxerga ficam de fora
+            live_set = set(fetched)
+            recommended = [m for m in recommended if m in live_set] or recommended
+        result.append((provider_id, name, tuple(recommended + extras)))
+    return result
+
+
 def resolve_targets(
     raw_keys: list[str],
     options: ProcessingOptions | None = None,
@@ -99,6 +159,10 @@ def resolve_targets(
                 custom_models=None if provider_id == "openrouter" else fallback,
                 client=client,
             )
+
+        preferred = _preferred_model(options, provider_obj.provider_id)
+        if preferred:
+            models = (preferred,) + tuple(m for m in models if m != preferred)
 
         targets.append(
             KeyTarget(

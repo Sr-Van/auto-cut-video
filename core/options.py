@@ -106,12 +106,18 @@ class ProcessingOptions:
     language: str = cfg.LANGUAGE
     # Instrucao livre do usuario sobre em que focar (vira "REGRA EXTRA" no prompt).
     focus_instruction: str = ""
+    # Modelo de IA preferido no formato "provedor:modelo" ("" = automatico).
+    # Ele e tentado primeiro; os demais modelos continuam como reserva.
+    ai_model: str = ""
 
     def __post_init__(self) -> None:
         self.normalize()
 
     def normalize(self) -> "ProcessingOptions":
         """Garante consistencia e aplica fallbacks de `core.config` quando necessario."""
+        self.ai_model = str(self.ai_model or "").strip()
+        if self.ai_model and ":" not in self.ai_model:
+            self.ai_model = ""
         self.whisper_model = (
             str(self.whisper_model or "").strip() or cfg.WHISPER_MODEL
         )
