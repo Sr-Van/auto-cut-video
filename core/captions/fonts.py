@@ -29,7 +29,60 @@ _FALLBACK_FONTS = [
     "/System/Library/Fonts/Supplemental/Arial.ttf",
 ]
 
+# Fontes que acompanham o app (assets/fonts, licenca OFL). Sao indexadas
+# antes das do sistema e copiadas para a pasta do libass na renderizacao.
+BUNDLED_FONTS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "assets",
+    "fonts",
+)
+
+
+def bundled_font_files() -> list[str]:
+    if not os.path.isdir(BUNDLED_FONTS_DIR):
+        return []
+    return sorted(
+        os.path.join(BUNDLED_FONTS_DIR, name)
+        for name in os.listdir(BUNDLED_FONTS_DIR)
+        if name.lower().endswith((".ttf", ".otf"))
+    )
+
+
+# Melhores fontes para legendas dinamicas em video vertical (exibidas no topo
+# como "Recomendadas"). Fontes comerciais da lista aparecem automaticamente caso
+# estejam instaladas no sistema; equivalentes/originais OFL ficam em assets/fonts.
+RECOMMENDED_FONTS = [
+    # Sans-Serif Geométricas e Neutras
+    "Helvetica",
+    "Helvetica Neue",
+    "Univers",
+    "Inter",
+    "Montserrat",
+    "Poppins",
+    "Futura",
+    "Nexa",
+    "Mont",
+    "Gotham",
+    "Lato",
+    "Fira Sans",
+    "Trebuchet MS",
+    "Tahoma",
+    # Sans-Serif Condensadas (alto impacto)
+    "Bebas Neue",
+    "Postamp Grotesk",
+    "Intro",
+    "Impact",
+    "Bahnschrift",
+    # Serifadas (elegância e estilo editorial)
+    "Garamond",
+    "EB Garamond",
+    "Bodoni",
+    "Bodoni Moda",
+]
+
 PRECONFIGURED_FONTS = [
+    "Poppins",
+    "Montserrat",
     "Arial",
     "Segoe UI",
     "Verdana",
@@ -43,6 +96,7 @@ PRECONFIGURED_FONTS = [
 ]
 
 _FONT_DIRS = [
+    BUNDLED_FONTS_DIR,
     "C:/Windows/Fonts",
     os.path.expandvars(r"%LOCALAPPDATA%/Microsoft/Windows/Fonts"),
     "/usr/share/fonts",
@@ -84,21 +138,30 @@ def build_font_index() -> dict[str, dict[str, str]]:
                 if not family or family.startswith("@"):
                     continue
                 style_l = (style or "").lower()
-                if "italic" in style_l or "oblique" in style_l:
-                    continue
+                italic = "italic" in style_l or "oblique" in style_l
                 key = family.strip().lower()
                 if not key:
                     continue
-                display_names.setdefault(key, family.strip())
                 slot = index.setdefault(key, {})
                 is_bold = any(
                     tag in style_l for tag in ("bold", "black", "heavy", "demi")
                 )
-                if is_bold:
-                    slot.setdefault("bold", fpath)
-                else:
-                    slot.setdefault("regular", fpath)
+                kind = ("bold" if is_bold else "regular") + (
+                    "_italic" if italic else ""
+                )
+                # "Bold" exato vence variantes (ExtraBold, Black...)
+                exact = style_l.replace("italic", "").strip() in ("bold", "regular", "")
+                if exact:
+                    slot[f"_{kind}_exact"] = slot.get(f"_{kind}_exact") or fpath
+                slot.setdefault(kind, fpath)
+                if not italic:
+                    display_names.setdefault(key, family.strip())
 
+    for slot in index.values():
+        for kind in ("regular", "bold", "regular_italic", "bold_italic"):
+            exact = slot.pop(f"_{kind}_exact", None)
+            if exact:
+                slot[kind] = exact
     _FONT_INDEX = index
     _SYSTEM_FONT_NAMES = sorted(display_names.values(), key=str.casefold)
     return index
@@ -126,11 +189,25 @@ def list_available_fonts() -> list[str]:
     return ordered
 
 
-def find_font_path(font_name: str = "Arial", bold: bool = True) -> str | None:
+def find_font_path(
+    font_name: str = "Arial", bold: bool = True, italic: bool = False
+) -> str | None:
     """Localiza um .ttf concreto para uso no PIL e no libass."""
     name = (font_name or "Arial").strip()
     slug = name.lower().replace(" ", "")
     win = "C:/Windows/Fonts/"
+    if italic:
+        entry = build_font_index().get(name.lower()) or {}
+        order = ("bold_italic", "regular_italic") if bold else ("regular_italic", "bold_italic")
+        for kind in order:
+            chosen = entry.get(kind)
+            if chosen and os.path.exists(chosen):
+                return chosen
+        for path in (
+            [f"{win}{slug}bi.ttf", f"{win}{slug}z.ttf"] if bold else [f"{win}{slug}i.ttf"]
+        ):
+            if os.path.exists(path):
+                return path
     candidates: list[str] = []
     if bold:
         candidates += [
@@ -160,11 +237,58 @@ def find_font_path(font_name: str = "Arial", bold: bool = True) -> str | None:
     return None
 
 
-def load_font(font_name: str, bold: bool, size: int):
+def libass_scale(path: str) -> float:
+    """Fracao do `Fontsize` que o libass usa como em: ele dimensiona pela
+    altura ascent+descent da fonte (Arial ~0.89, Poppins ~0.71)."""
+    if os.getenv("CAPTION_FONT_SCALE"):
+        return _LIBASS_FONT_SCALE
+    metrics = _win_metrics(path)
+    if metrics:
+        units, height = metrics
+        return max(0.4, min(1.0, units / float(height)))
+    try:
+        ascent, descent = ImageFont.truetype(path, 1000).getmetrics()
+        return max(0.4, min(1.0, 1000.0 / float(ascent + descent)))
+    except Exception:
+        return _LIBASS_FONT_SCALE
+
+
+def _win_metrics(path: str) -> tuple[int, int] | None:
+    """(unitsPerEm, usWinAscent+usWinDescent) lidos direto do .ttf/.otf."""
+    import struct
+
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()
+        num_tables = struct.unpack(">H", data[4:6])[0]
+        tables = {}
+        for i in range(num_tables):
+            rec = data[12 + 16 * i : 28 + 16 * i]
+            tag = rec[:4].decode("latin-1")
+            offset = struct.unpack(">I", rec[8:12])[0]
+            tables[tag] = offset
+        units = struct.unpack(">H", data[tables["head"] + 18 : tables["head"] + 20])[0]
+        os2 = tables["OS/2"]
+        win_ascent, win_descent = struct.unpack(">HH", data[os2 + 74 : os2 + 78])
+        if units and win_ascent + win_descent:
+            return units, win_ascent + win_descent
+    except Exception:
+        return None
+    return None
+
+
+def font_effective_size(font, size: float) -> float:
+    scale = getattr(font, "libass_scale", None) or _LIBASS_FONT_SCALE
+    return max(1.0, float(size) * scale)
+
+
+def load_font(font_name: str, bold: bool, size: int, italic: bool = False):
     """Retorna (font PIL, familia, bold, pasta da fonte)."""
-    path = find_font_path(font_name, bold)
+    path = find_font_path(font_name, bold, italic)
     if path:
-        font = ImageFont.truetype(path, round(effective_size(size)))
+        scale = libass_scale(path)
+        font = ImageFont.truetype(path, max(1, round(size * scale)))
+        font.libass_scale = scale
         try:
             family, style = font.getname()
         except Exception:
@@ -177,3 +301,17 @@ def load_font(font_name: str, bold: bool, size: int):
         )
     return ImageFont.load_default(), font_name, bold, None
 
+
+
+def register_bundled_fonts() -> int:
+    """Disponibiliza as fontes do app para o Qt (previas e lista de fontes),
+    sem precisar instala-las no sistema. Retorna quantas foram registradas."""
+    try:
+        from PySide6.QtGui import QFontDatabase
+    except Exception:
+        return 0
+    count = 0
+    for path in bundled_font_files():
+        if QFontDatabase.addApplicationFont(path) >= 0:
+            count += 1
+    return count

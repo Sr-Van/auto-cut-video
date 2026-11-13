@@ -16,6 +16,7 @@ from core.captions.ass_writer import (
 )
 from core.captions.fonts import (
     PRECONFIGURED_FONTS,
+    RECOMMENDED_FONTS,
     _FALLBACK_FONTS,
     _FONT_DIRS,
     _LIBASS_FONT_SCALE,
@@ -48,6 +49,7 @@ __all__ = [
     "CaptionWord",
     "PRECONFIGURED_FONTS",
     "PRESETS",
+    "RECOMMENDED_FONTS",
     "VIRAL_PRESETS",
     "apply_preset",
     "build_ass",
