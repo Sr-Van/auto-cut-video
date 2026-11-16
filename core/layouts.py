@@ -28,6 +28,9 @@ class Slot:
     height: float  # fracao da altura total (a soma do layout e 1.0)
     zoom: float = 1.0  # so para `video`: zoom sobre o contain
     fit: str = "contain"  # `video`: "contain" (fundo desfocado) ou "cover" (zoom ate preencher)
+    # `focus`: "static" (corta e desliza) ou "dynamic" (ciclos de zoom na fala
+    # longa + trava na cabeca; ver core/dynamic_zoom.py)
+    motion: str = "static"
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,10 @@ class Layout:
     @property
     def needs_vision(self) -> bool:
         return any(s.kind in VISION_SLOTS for s in self.slots)
+
+    @property
+    def dynamic(self) -> bool:
+        return any(s.kind == "focus" and s.motion == "dynamic" for s in self.slots)
 
     @property
     def has_text(self) -> bool:
@@ -74,6 +81,17 @@ LAYOUTS: dict[str, Layout] = {
         tag="Podcast",
         description="Tela cheia no rosto de quem está falando; troca de pessoa sozinho.",
         slots=(Slot("focus", 1.0),),
+        caption_slot=0, caption_anchor=0.7, caption_scale=1.1,
+    ),
+    "follow_dynamic": Layout(
+        id="follow_dynamic",
+        name="Seguir quem fala · dinâmico",
+        tag="Dinâmico",
+        description=(
+            "Como 'Seguir quem fala', mas aproxima devagar durante falas longas, "
+            "acompanha a cabeça por 1 s na pausa e volta."
+        ),
+        slots=(Slot("focus", 1.0, motion="dynamic"),),
         caption_slot=0, caption_anchor=0.7, caption_scale=1.1,
     ),
     "react": Layout(

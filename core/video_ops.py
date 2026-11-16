@@ -241,6 +241,7 @@ def _process_vertical(
             cut_end,
             words=speech_words,
             want_cam=any(s.kind in ("cam", "content") for s in layout.slots),
+            dynamic=layout.dynamic,
             cache_path=Path(out_path).parent / ".cache" / f"framing_{index:03d}.json",
             cache_key={
                 "video": cache.video_hash(video_path),
