@@ -260,20 +260,15 @@ def _restore_live(src: str, out: str, plan, src_w: int, src_h: int) -> tuple[str
     return ";".join(parts) + ";", cur
 
 
-def _focus_slot(src: str, out: str, w: int, h: int, plan, src_w: int, src_h: int) -> str:
-    """Recorte com a proporcao do slot que acompanha o rosto em foco.
+def _focus_base(src: str, out: str, w: int, h: int, plan, src_w: int, src_h: int):
+    """Enquadramento base do "seguir quem fala" (compartilhado pelos modos).
 
-    O formato nunca muda: trechos sem rosto ja chegam no plano como posicao
-    mantida ou centro. Trocas de pessoa na mesma cena deslizam (GLIDE_S);
-    trocas de cena reais sao saltos secos.
+    Devolve (pre, src, cw, ch, pos, expr_x, expr_y) ou None sem plano.
     """
     aspect = w / h
     shots = list(getattr(plan, "shots", None) or [])
     if not shots or not src_w or not src_h:
-        return (
-            f"[{src}]scale={w}:{h}:force_original_aspect_ratio=increase,"
-            f"crop={w}:{h},setsar=1,format=yuv420p[{out}]"
-        )
+        return None
     pre, src = _restore_live(src, out, plan, src_w, src_h)
     face = sorted(s.size for s in shots)[len(shots) // 2] * src_w
     # rosto ocupa ~1/3 da largura em slots largos; em tela cheia vertical usa a altura toda
@@ -310,15 +305,238 @@ def _focus_slot(src: str, out: str, w: int, h: int, plan, src_w: int, src_h: int
                       f"{x}+({nx - x})*{k},{expr_x}))")
             expr_y = (f"if(lt(t,{e:.2f}),{y},if(lt(t,{e + GLIDE_S:.2f}),"
                       f"{y}+({ny - y})*{k},{expr_y}))")
+    return pre, src, cw, ch, pos, expr_x, expr_y
+
+
+def _focus_slot(src: str, out: str, w: int, h: int, plan, src_w: int, src_h: int) -> str:
+    """Recorte com a proporcao do slot que acompanha o rosto em foco.
+
+    O formato nunca muda: trechos sem rosto ja chegam no plano como posicao
+    mantida ou centro. Trocas de pessoa na mesma cena deslizam (GLIDE_S);
+    trocas de cena reais sao saltos secos.
+    """
+    base = _focus_base(src, out, w, h, plan, src_w, src_h)
+    if base is None:
+        return (
+            f"[{src}]scale={w}:{h}:force_original_aspect_ratio=increase,"
+            f"crop={w}:{h},setsar=1,format=yuv420p[{out}]"
+        )
+    pre, src, cw, ch, _pos, expr_x, expr_y = base
     return (
         f"{pre}[{src}]crop=w={cw}:h={ch}:x='{expr_x}':y='{expr_y}',"
         f"scale={w}:{h},setsar=1,format=yuv420p[{out}]"
     )
 
 
+# Margem minima entre a cabeca e a borda do quadro no zoom maximo (fracao).
+HEAD_MARGIN = 0.05
+# A cabeca nunca passa destas fracoes da largura/altura do quadro.
+HEAD_MAX_SHARE = 0.78
+HEAD_MAX_HEIGHT = 0.80
+
+
+def _head_box(face_slot):
+    """Caixa da cabeca a partir do rosto do detector (cabelo/testa e queixo)."""
+    cx, cy, fw, fh = face_slot
+    return cx - fw * 0.6, cx + fw * 0.6, cy - fh * 0.85, cy + fh * 0.65
+
+
+def safe_zoom(face_slot, target: float) -> float:
+    """Maior zoom (<= target) em que a cabeca ainda cabe inteira no quadro.
+
+    O quadro se reposiciona durante o zoom (ver `head_screen_target`), entao
+    o limite e so o tamanho da cabeca ampliada, nao onde ela esta.
+    """
+    left, right, top, bottom = _head_box(face_slot)
+    z = float(target)
+    if right - left > 0:
+        z = min(z, HEAD_MAX_SHARE / (right - left))
+    if bottom - top > 0:
+        z = min(z, HEAD_MAX_HEIGHT / (bottom - top))
+    return max(1.0, z)
+
+
+# Onde o centro do rosto fica na tela no zoom maximo: centralizado na
+# horizontal e um pouco acima do meio (regra dos tercos para rosto).
+FACE_SCREEN_X = 0.5
+FACE_SCREEN_Y = 0.40
+
+
+def head_screen_target(face_slot, zoom: float) -> tuple[float, float]:
+    """Posicao de tela do centro do rosto no zoom maximo.
+
+    O zoom leva o rosto para o centro (FACE_SCREEN_X/Y); se a cabeca ampliada
+    nao couber ali com HEAD_MARGIN, empurra o minimo necessario.
+    """
+    cx, cy, _fw, _fh = face_slot
+    left, right, top, bottom = _head_box(face_slot)
+    m = HEAD_MARGIN
+
+    def fit(want, lo_ext, hi_ext):
+        lo, hi = m + lo_ext * zoom, 1 - m - hi_ext * zoom
+        return (lo + hi) / 2 if lo > hi else max(lo, min(hi, want))
+
+    return (fit(FACE_SCREEN_X, cx - left, right - cx),
+            fit(FACE_SCREEN_Y, cy - top, bottom - cy))
+
+
+def _glide_pos(t: float, shots, xs, cuts) -> tuple[float, float]:
+    """Posicao do recorte base no instante t (mesma regra das expressoes)."""
+    for idx, s in enumerate(shots):
+        if t < s.end or idx == len(shots) - 1:
+            if idx > 0:
+                prev = shots[idx - 1]
+                e = prev.end
+                at_cut = any(abs(c - e) <= 0.3 for c in cuts)
+                if not at_cut and t < e + GLIDE_S and xs[idx - 1] != xs[idx]:
+                    import math
+
+                    k = (1 - math.cos(math.pi * (t - e) / GLIDE_S)) / 2
+                    (x0, y0), (x1, y1) = xs[idx - 1], xs[idx]
+                    return x0 + (x1 - x0) * k, y0 + (y1 - y0) * k
+            return xs[idx]
+    return xs[-1]
+
+
+def _head_delta(head, t: float) -> tuple[float, float]:
+    if not head:
+        return 0.0, 0.0
+    if t <= head[0][0]:
+        return head[0][1], head[0][2]
+    for (t0, x0, y0), (t1, x1, y1) in zip(head, head[1:]):
+        if t0 <= t <= t1:
+            k = (t - t0) / (t1 - t0) if t1 > t0 else 0.0
+            return x0 + (x1 - x0) * k, y0 + (y1 - y0) * k
+    return head[-1][1], head[-1][2]
+
+
+def dynamic_crop_rects(plan, w: int, h: int, src_w: int, src_h: int,
+                       fps: float = 30.0):
+    """Retangulo de recorte (x, y, cw, ch) na origem para cada quadro.
+
+    Fora dos ciclos: o recorte do "seguir quem fala". Num ciclo, o recorte
+    encolhe (zoom) e e posicionado para o rosto ir de onde estava ate o
+    centro (head_screen_target); na trava soma o deslocamento da cabeca.
+    Devolve (cw, ch, [(t, x, y, rw, rh)]) ou None sem ciclos.
+    """
+    import math
+
+    shots = list(getattr(plan, "shots", None) or [])
+    beats = list(getattr(plan, "beats", None) or [])
+    if not shots or not beats or not src_w or not src_h:
+        return None
+    aspect = w / h
+    # mesmo tamanho base do _focus_base (tela cheia vertical: altura toda)
+    face = sorted(s.size for s in shots)[len(shots) // 2] * src_w
+    cw = max(face * 3.0, src_h * aspect * 0.5) if aspect > 1 else src_h * aspect
+    ch = cw / aspect
+    if ch > src_h:
+        ch = src_h
+        cw = ch * aspect
+    if cw > src_w:
+        cw = src_w
+        ch = cw / aspect
+    cw, ch = _even(cw), _even(ch)
+
+    def pos(s):
+        x = int(max(0, min(src_w - cw, s.cx * src_w - cw / 2)))
+        y = int(max(0, min(src_h - ch, s.cy * src_h - ch * 0.42)))
+        return x, y
+
+    cuts = list(getattr(plan, "scene_cuts", None) or [])
+    xs = [pos(s) for s in shots]
+
+    prepared = []
+    for beat in beats:
+        shot = next((s for s in shots if s.start <= beat.start < s.end), None)
+        if shot is None:
+            continue
+        sx, sy = pos(shot)
+        fcx, fcy, fw, fh = beat.face
+        fpx, fpy = fcx * src_w, fcy * src_h
+        # rosto no quadro base no instante em que o ciclo comeca
+        d0 = _head_delta(beat.head, beat.start)
+        s0 = ((fpx + d0[0] * src_w - sx) / cw, (fpy + d0[1] * src_h - sy) / ch)
+        # alvo calculado com o rosto ja centrado (recorte centrado nele)
+        cx0 = max(0, min(src_w - cw, fpx - cw / 2))
+        cy0 = max(0, min(src_h - ch, fpy - ch * 0.42))
+        face_slot = ((fpx - cx0) / cw, (fpy - cy0) / ch, fw * src_w / cw, fh * src_h / ch)
+        zoom = safe_zoom(face_slot, beat.zoom)
+        if zoom < 1.05:
+            continue
+        target = head_screen_target(face_slot, zoom)
+        prepared.append((beat, zoom, fpx, fpy, s0, target))
+    if not prepared:
+        return None
+
+    end = max([shots[-1].end] + [b.end for b, *_ in prepared])
+    rects = []
+    for n in range(int(math.ceil(end * fps)) + 1):
+        t = n / fps
+        bx, by = _glide_pos(t, shots, xs, cuts)
+        rect = (bx, by, cw, ch)
+        for beat, zoom, fpx, fpy, s0, target in prepared:
+            if not (beat.start <= t < beat.end):
+                continue
+            if t < beat.peak:
+                prog = math.sin(math.pi / 2 * (t - beat.start) / (beat.peak - beat.start))
+            else:
+                prog = 1.0
+            z = 1 + (zoom - 1) * prog
+            rw = _even(cw / z)
+            rh = max(2, int(round(rw / aspect / 2)) * 2)
+            # rosto onde ele realmente esta agora (zoom e trava seguem a trilha)
+            dx, dy = _head_delta(beat.head, t)
+            fx_src = fpx + dx * src_w
+            fy_src = fpy + dy * src_h
+            scr_x = s0[0] + (target[0] - s0[0]) * prog
+            scr_y = s0[1] + (target[1] - s0[1]) * prog
+            x = max(0, min(src_w - rw, fx_src - scr_x * rw))
+            y = max(0, min(src_h - rh, fy_src - scr_y * rh))
+            rect = (x, y, rw, rh)
+            break
+        rects.append((t, int(round(rect[0])), int(round(rect[1])),
+                      int(rect[2]), int(rect[3])))
+    return cw, ch, rects
+
+
+def _dynamic_focus_slot(src: str, out: str, w: int, h: int, plan,
+                        src_w: int, src_h: int, work_dir: str | None = None) -> str:
+    """"Seguir quem fala" com ciclos de zoom + trava na cabeca.
+
+    Um unico recorte por quadro (tamanho e posicao enviados por `sendcmd`)
+    seguido de `scale` para o tamanho fixo do slot. O `crop` do FFmpeg nao
+    acompanha um quadro que muda de tamanho no meio do grafo, entao o zoom e
+    feito encolhendo o recorte, nunca ampliando a imagem antes dele.
+    """
+    data = dynamic_crop_rects(plan, w, h, src_w, src_h) if work_dir else None
+    if data is None:
+        return _focus_slot(src, out, w, h, plan, src_w, src_h)
+    cw, ch, rects = data
+    name = f"crop@dz{out}"
+    lines, last = [], None
+    for t, x, y, rw, rh in rects:
+        cur = (x, y, rw, rh)
+        if cur == last:
+            continue
+        lines.append(f"{t:.4f} {name} w {rw}, {name} h {rh}, {name} x {x}, {name} y {y};")
+        last = cur
+    cmd_file = f"zoom_{out}.cmd"
+    with open(os.path.join(work_dir, cmd_file), "w", encoding="utf-8") as fh:
+        fh.write(chr(10).join(lines))
+    pre, src = _restore_live(src, out, plan, src_w, src_h)
+    t0, x0, y0, rw0, rh0 = rects[0]
+    return (
+        f"{pre}[{src}]sendcmd=f={cmd_file},"
+        f"{name}=w={rw0}:h={rh0}:x={x0}:y={y0}:exact=1,"
+        f"scale={w}:{h},setsar=1,format=yuv420p[{out}]"
+    )
+
+
 def build_layout_filter(layout, heights, *, width: int, options, plan=None,
                         src_size=(0, 0), band_lines=(), band_font_size=0,
-                        font_file: str = "", image_input: int | None = None) -> str:
+                        font_file: str = "", image_input: int | None = None,
+                        work_dir: str | None = None) -> str:
     """Monta o filter_complex de um layout por slots. Saida: [v]."""
     src_w, src_h = src_size
     video_kinds = {"video", "focus", "cam", "content"}
@@ -340,7 +558,11 @@ def build_layout_filter(layout, heights, *, width: int, options, plan=None,
                                      options.blur_sigma, options.blur_divisor,
                                      options.bg_brightness, fit=getattr(slot, "fit", "contain")))
         elif slot.kind == "focus":
-            parts.append(_focus_slot(f"src{i}", out, width, h, plan, src_w, src_h))
+            if getattr(slot, "motion", "static") == "dynamic":
+                parts.append(_dynamic_focus_slot(f"src{i}", out, width, h, plan,
+                                                 src_w, src_h, work_dir=work_dir))
+            else:
+                parts.append(_focus_slot(f"src{i}", out, width, h, plan, src_w, src_h))
         elif slot.kind == "cam":
             box = getattr(plan, "cam_box", None)
             if box and src_w and src_h:
@@ -482,7 +704,7 @@ def render_clip(
             filters = build_layout_filter(
                 layout, heights, width=options.width, options=options, plan=plan,
                 src_size=src_size, band_lines=lines, band_font_size=size,
-                font_file=font_name, image_input=image_input,
+                font_file=font_name, image_input=image_input, work_dir=work,
             )
 
         vlabel = "[v]"
