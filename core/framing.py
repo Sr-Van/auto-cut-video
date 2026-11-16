@@ -32,7 +32,7 @@ import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-ALGO_VERSION = 5
+ALGO_VERSION = 6
 SAMPLE_FPS = 4.0
 ANALYSIS_WIDTH = 320
 MIN_SHOT_S = 1.5
@@ -85,9 +85,13 @@ class FramingPlan:
     scene_cuts: list[float] = field(default_factory=list)  # segundos, relativos
     # Trechos com moldura: (inicio, fim, caixa da area viva normalizada)
     live_boxes: list[tuple[float, float, Box]] = field(default_factory=list)
+    # Formato dinamico: ciclos de zoom + trava na cabeca (core.dynamic_zoom)
+    beats: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data["beats"] = [b.to_list() for b in self.beats]
+        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "FramingPlan":
@@ -106,6 +110,9 @@ class FramingPlan:
             (float(a), float(b), tuple(float(v) for v in box))
             for a, b, box in data.get("live_boxes", [])
         ]
+        from core.dynamic_zoom import ZoomBeat
+
+        plan.beats = [ZoomBeat.from_list(b) for b in data.get("beats", [])]
         cam = data.get("cam_box")
         plan.cam_box = tuple(cam) if cam else None
         content = data.get("content_box")
@@ -632,7 +639,7 @@ def map_to_restored(box: Box, live: Box, src_w: int, src_h: int) -> Box:
 
 
 def plan_from_tracks(tracks, n_frames, words, src_w, src_h, want_cam: bool,
-                     cuts=()) -> FramingPlan:
+                     cuts=(), dynamic: bool = False) -> FramingPlan:
     plan = FramingPlan(src_width=src_w, src_height=src_h, faces_found=len(tracks))
     plan.scene_cuts = [c / SAMPLE_FPS for c in cuts]
     if want_cam:
@@ -660,12 +667,15 @@ def plan_from_tracks(tracks, n_frames, words, src_w, src_h, want_cam: bool,
             else:
                 runs.append((a + ra, a + rb, k))
     sizes = sorted(t.median_box()[2] for t in candidates)
+    shot_tracks = []
     for a, b, k in runs:
+        shot_tracks.append(candidates[k] if k >= 0 else None)
         if k == CENTER:
             plan.shots.append(FocusShot(start=a / SAMPLE_FPS, end=b / SAMPLE_FPS,
                                         cx=0.5, cy=0.42, size=sizes[len(sizes) // 2]))
             continue
         if k < 0:
+            shot_tracks.pop()
             continue
         x, y, w, h = candidates[k].median_box()
         plan.shots.append(
@@ -676,6 +686,11 @@ def plan_from_tracks(tracks, n_frames, words, src_w, src_h, want_cam: bool,
     if plan.shots:
         plan.shots[0].start = 0.0
         plan.shots[-1].end = max(plan.shots[-1].end, n_frames / SAMPLE_FPS)
+    if dynamic and words and plan.shots:
+        from core.dynamic_zoom import build_beats
+
+        plan.beats = build_beats(words, plan.shots, shot_tracks, plan.scene_cuts,
+                                 n_frames / SAMPLE_FPS, SAMPLE_FPS)
     return plan
 
 
@@ -707,9 +722,10 @@ def _original_coords(tracks, lives, src_w, src_h):
 # ---------------------------------------------------------------- API
 def analyze_clip(video_path: str, start: float, end: float, words=None,
                  want_cam: bool = False, cache_path: Path | None = None,
-                 cache_key: dict | None = None) -> FramingPlan:
+                 cache_key: dict | None = None, dynamic: bool = False) -> FramingPlan:
     """Plano de enquadramento da janela [start, end] (tempos do plano sao relativos)."""
-    key = dict(cache_key or {}, algo=ALGO_VERSION, want_cam=bool(want_cam))
+    key = dict(cache_key or {}, algo=ALGO_VERSION, want_cam=bool(want_cam),
+               dynamic=bool(dynamic))
     if cache_path is not None and cache_path.is_file():
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))
@@ -740,7 +756,8 @@ def analyze_clip(video_path: str, start: float, end: float, words=None,
     mouth_motion(frames, originals)
     for tr, orig in zip(tracks, originals):
         tr.motion = orig.motion
-    plan = plan_from_tracks(tracks, len(frames), words, src_w, src_h, want_cam, cuts)
+    plan = plan_from_tracks(tracks, len(frames), words, src_w, src_h, want_cam, cuts,
+                            dynamic=dynamic)
     plan.live_boxes = [(a / SAMPLE_FPS, b / SAMPLE_FPS, box) for a, b, box in lives]
     if plan.live_boxes:
         a0, b0, box0 = plan.live_boxes[0]
