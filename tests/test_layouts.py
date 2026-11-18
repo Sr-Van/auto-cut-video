@@ -107,6 +107,29 @@ class CaptionPlacementTest(unittest.TestCase):
         layouts.caption_options(opts)
         self.assertEqual(opts.caption_font_size, 72)
 
+    def test_margem_inferior_respeitada_em_tela_cheia_e_escalada(self):
+        for lid in ("center", "follow", "follow_dynamic"):
+            opts = ProcessingOptions(layout_id=lid, caption_margin_bottom=640)
+            adj = layouts.caption_options(opts)
+            self.assertEqual(adj.caption_margin_bottom, 640, lid)
+
+            opts_hd = ProcessingOptions(
+                layout_id=lid, width=720, height=1280, caption_margin_bottom=640
+            )
+            adj_hd = layouts.caption_options(opts_hd)
+            self.assertEqual(adj_hd.caption_margin_bottom, round(640 * 1280 / 1920), lid)
+
+    def test_multislot_ignora_margem_excessiva_e_fica_no_slot(self):
+        for lid in ("react", "title_middle", "image_video"):
+            opts = ProcessingOptions(layout_id=lid, caption_margin_bottom=900)
+            adj = layouts.caption_options(opts)
+            lay = layouts.get_layout(lid)
+            heights = layouts.slot_heights(lay, opts.height)
+            bottom = opts.height - adj.caption_margin_bottom
+            top_of_slot = sum(heights[: lay.caption_slot])
+            self.assertGreater(bottom, top_of_slot, lid)
+            self.assertLessEqual(bottom, top_of_slot + heights[lay.caption_slot], lid)
+
 
 class BandSafetyTest(unittest.TestCase):
     def test_texto_da_faixa_nao_e_interpretado_pelo_drawtext(self):

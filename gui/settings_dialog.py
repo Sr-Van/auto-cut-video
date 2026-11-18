@@ -131,8 +131,11 @@ def _field_box(title: str, control: QWidget, hint: str = "") -> QWidget:
     head.setContentsMargins(0, 0, 0, 0)
     head.addWidget(label(title, "FieldLabel"))
     head.addStretch(1)
+    hint_lbl = None
     if hint:
-        head.addWidget(label(hint, "FieldHint"))
+        hint_lbl = label(hint, "FieldHint")
+        head.addWidget(hint_lbl)
+    holder.hint_label = hint_lbl
     layout.addLayout(head)
     layout.addWidget(control)
     return holder
@@ -471,8 +474,10 @@ class SettingsDialog(QDialog):
         self.caption_margin_bottom = QSpinBox()
         self.caption_margin_bottom.setRange(0, 1200)
         self.caption_margin_bottom.setSingleStep(10)
+        margin_box = _field_box("Margem inferior", self.caption_margin_bottom, "px")
+        self.caption_margin_hint = margin_box.hint_label
         grid.addWidget(
-            _field_box("Margem inferior", self.caption_margin_bottom, "px"),
+            margin_box,
             6,
             0,
         )
@@ -741,6 +746,21 @@ class SettingsDialog(QDialog):
         self.layout_custom_text.setEnabled(
             self.layout_text_source.currentData() == "custom"
         )
+        single_slot = len(layout.slots) == 1
+        if hasattr(self, "caption_margin_bottom"):
+            self.caption_margin_bottom.setEnabled(single_slot)
+            if single_slot:
+                self.caption_margin_bottom.setToolTip(
+                    "Distância da legenda até a borda inferior (em px para 1080×1920)."
+                )
+            else:
+                self.caption_margin_bottom.setToolTip(
+                    f"No formato '{layout.name}', a legenda fica ancorada dentro do slot dedicado."
+                )
+        if getattr(self, "caption_margin_hint", None) is not None:
+            self.caption_margin_hint.setText(
+                "px" if single_slot else "Fixo pelo formato"
+            )
 
     def _set_aux_path(self, field: QLineEdit, path: str):
         field.setText(path)
