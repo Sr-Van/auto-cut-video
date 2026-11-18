@@ -19,11 +19,22 @@ class TestTimeFmt(unittest.TestCase):
         self.assertEqual(hhmmss_to_seconds("02:03"), 123)
         self.assertEqual(hhmmss_to_seconds("10:00"), 600)
 
+    def test_hhmmss_to_seconds_fractional(self):
+        self.assertAlmostEqual(hhmmss_to_seconds("00:01:23.450"), 83.45)
+        self.assertAlmostEqual(hhmmss_to_seconds("00:01:23,5"), 83.5)
+        self.assertAlmostEqual(hhmmss_to_seconds("02:03.25"), 123.25)
+
     def test_hhmmss_to_seconds_invalid_raises(self):
-        with self.assertRaises(ValueError):
-            hhmmss_to_seconds("12")
-        with self.assertRaises(ValueError):
-            hhmmss_to_seconds("01:02:03:04")
+        for bad in (
+            "12",
+            "01:02:03:04",
+            "-00:01:00",
+            "00:01:-05",
+            "00:01:nan",
+            None,
+        ):
+            with self.assertRaises(ValueError):
+                hhmmss_to_seconds(bad)
 
     def test_clamp_seconds(self):
         self.assertEqual(clamp_seconds(-5.0, 100.0), 0.0)

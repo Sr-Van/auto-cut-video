@@ -34,7 +34,7 @@ from core.providers import (
     resolve_targets,
     status_code_from_exc,
 )
-from utils.timefmt import seconds_to_hhmmss
+from utils.timefmt import hhmmss_to_seconds, seconds_to_hhmmss
 
 if TYPE_CHECKING:
     from core.options import ProcessingOptions
@@ -269,6 +269,13 @@ def _filter_by_score(
         end = str(clip.get("end") or "").strip()
         if not start or not end:
             continue
+        try:
+            start_s = hhmmss_to_seconds(start)
+            end_s = hhmmss_to_seconds(end)
+        except ValueError:
+            continue
+        if end_s <= start_s:
+            continue
         if clip.get("has_promo_or_cta") is True:
             continue
         try:
@@ -276,10 +283,17 @@ def _filter_by_score(
         except (TypeError, ValueError):
             continue
         if score >= eff_min_score:
+            raw_hook = str(clip.get("hook") or start).strip()
+            try:
+                hook_s = hhmmss_to_seconds(raw_hook)
+                if not (start_s <= hook_s <= end_s):
+                    raw_hook = start
+            except ValueError:
+                raw_hook = start
             normalized = dict(clip)
             normalized["start"] = start
             normalized["end"] = end
-            normalized["hook"] = str(clip.get("hook") or start).strip()
+            normalized["hook"] = raw_hook
             normalized["viral_score"] = score
             normalized.setdefault("category", "RELEVANTE")
             normalized.setdefault("title", "Corte")

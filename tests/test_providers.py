@@ -139,6 +139,46 @@ class TestProvidersAndAnalyzer(unittest.TestCase):
         self.assertEqual(opts.max_clip_duration, 50)
         self.assertTrue(len(opts.whisper_model) > 0)
 
+    def test_filter_by_score_sanitizes_timestamps_and_hook(self):
+        clips = [
+            {
+                "start": "00:01:00",
+                "end": "00:00:50",
+                "hook": "00:00:55",
+                "viral_score": 10,
+            },
+            {
+                "start": "00:00:30",
+                "end": "00:00:30",
+                "hook": "00:00:30",
+                "viral_score": 9,
+            },
+            {
+                "start": "invalido",
+                "end": "00:00:45",
+                "viral_score": 9,
+            },
+            {
+                "start": "00:00:05.250",
+                "end": "00:00:40.750",
+                "hook": "00:02:00",
+                "viral_score": 8,
+            },
+            {
+                "start": "00:01:00",
+                "end": "00:01:45",
+                "hook": "lixo",
+                "viral_score": 9,
+            },
+        ]
+        kept = ai_analyzer._filter_by_score(clips, min_score=8, max_clips=10)
+        self.assertEqual(len(kept), 2)
+        self.assertEqual(kept[0]["viral_score"], 9)
+        self.assertEqual(kept[0]["hook"], "00:01:00")
+        self.assertEqual(kept[1]["start"], "00:00:05.250")
+        self.assertEqual(kept[1]["end"], "00:00:40.750")
+        self.assertEqual(kept[1]["hook"], "00:00:05.250")
+
 
 if __name__ == "__main__":
     unittest.main()
