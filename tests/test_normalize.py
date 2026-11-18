@@ -76,6 +76,43 @@ class TestNormalize(unittest.TestCase):
         self.assertEqual(result[0]["title"], "Corte Nota 10")
         self.assertEqual(result[0]["start"], "00:00:10")
 
+    def test_normalize_does_not_merge_beyond_max_duration(self):
+        segments = [_DummySeg(0.0, 120.0)]
+        clips = [
+            {
+                "start": "00:00:10",
+                "end": "00:00:55",
+                "hook": "00:00:15",
+                "viral_score": 8,
+                "title": "Corte Nota 8",
+            },
+            {
+                "start": "00:00:45",
+                "end": "00:01:30",
+                "hook": "00:00:50",
+                "viral_score": 10,
+                "title": "Corte Nota 10",
+            },
+        ]
+        result = normalize_clips(
+            clips,
+            segments,
+            total_duration=120.0,
+            min_duration=30,
+            max_duration=60,
+            pause_gap=1.5,
+        )
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["viral_score"], 10)
+        self.assertEqual(result[0]["title"], "Corte Nota 10")
+        self.assertEqual(result[0]["start"], "00:00:45")
+        self.assertEqual(result[0]["end"], "00:01:30")
+
+    def test_default_padding_is_short_phonetic_margin(self):
+        from core.options import ProcessingOptions
+
+        self.assertAlmostEqual(ProcessingOptions().padding_s, 0.3)
+
 
 if __name__ == "__main__":
     unittest.main()
