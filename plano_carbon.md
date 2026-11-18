@@ -39,7 +39,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
 
 ### Fase 2 (P0) · Qualidade Direta dos Cortes, Zoom Dinâmico e Legendas
 
-- [ ] **2.1. Corrigir ativação do zoom dinâmico (`follow_dynamic`) e máscara de fala (`follow`)**
+- [x] **2.1. Corrigir ativação do zoom dinâmico (`follow_dynamic`) e máscara de fala (`follow`)**
   - **Arquivos:** `core/video_ops.py` (`_process_vertical`, `_clip_words`), `core/framing.py` (`analyze_clip`, `plan_from_tracks`), `core/pipeline.py`.
   - **Problema:** Na configuração padrão (`captions_enabled=False` e `caption_transcribe_mode="clip"`), `pipeline.py` transcreve com `word_timestamps=False`, deixando `seg.words` vazio. Em `_process_vertical`, `framing.analyze_clip` executa **antes** de `_clip_words` e consulta apenas `segments`, recebendo `words=[]`. Consequências:
     1. Em `follow_dynamic`, `if dynamic and words and plan.shots:` falha silenciosamente (`plan.beats = []`), desativando o zoom dinâmico.
@@ -51,7 +51,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Incluir `"has_words": bool(words)` (e versão de algoritmo atualizada) na `cache_key` do `framing`.
   - **Critério de aceite:** `follow_dynamic` gera `ZoomBeat`s reais com `captions_enabled=False` ou `True` (nos modos `"clip"` e `"full"`); o cache invalida automaticamente planos antigos sem palavras.
 
-- [ ] **2.2. Ajustar `PADDING_S` e impedir estouro de `max_clip_duration` no merge**
+- [x] **2.2. Ajustar `PADDING_S` e impedir estouro de `max_clip_duration` no merge**
   - **Arquivos:** `core/config.py` (`PADDING_S`), `core/options.py`, `utils/normalize.py` (`normalize_clips`), `core/video_ops.py` (`_cut_window`), `utils/report.py`, `tests/test_normalize.py`.
   - **Problema:**
     - `PADDING_S = 5` adiciona **+10s totais** (5s antes do gancho, matando os primeiros 3s de retenção, e 5s depois do desfecho, trazendo de volta CTAs/despedidas que o prompt pediu para cortar e empurrando clipes de 90s para 100s).
@@ -63,7 +63,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Registrar no clipe/relatório a janela efetiva cortada quando aplicável.
   - **Critério de aceite:** Clipes gerados abrem imediatamente no gancho, nunca ultrapassam `max_clip_duration` + padding mínimo após merge, e mantêm sincronia de tempo entre UI e MP4.
 
-- [ ] **2.3. Respeitar `caption_margin_bottom` nos presets e Ajustes**
+- [x] **2.3. Respeitar `caption_margin_bottom` nos presets e Ajustes**
   - **Arquivos:** `core/layouts.py` (`caption_options`), `gui/widgets.py` (`PhonePreviewWidget._draw_caption`), `gui/settings_dialog.py`, `tests/test_layouts.py`, `tests/test_captions_presets.py`.
   - **Problema:** `layouts.caption_options(options)` recalcula e sobrescreve incondicionalmente `adjusted.caption_margin_bottom` com `layout.caption_anchor`. Na prática, isso anula tanto a altura própria definida em cada preset de `VIRAL_PRESETS` (ex.: `280`, `380`, `560`, `640`) quanto o controle `"Margem inferior (px)"` em Ajustes → Legenda.
   - **Solução:**
