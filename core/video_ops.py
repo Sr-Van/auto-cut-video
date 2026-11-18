@@ -12,6 +12,7 @@ from core.config import OUTPUT_DIR
 from core.exceptions import (
     PipelineCancelledError,
     check_cancelled,
+    run_cmd,
     run_interruptible_cmd,
 )
 from core.options import ProcessingOptions
@@ -48,7 +49,7 @@ def get_duration(video_path: str) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(video_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_cmd(cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao obter duracao: {result.stderr}")
     return float(result.stdout.strip())

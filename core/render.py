@@ -17,7 +17,7 @@ from functools import lru_cache
 from threading import Event
 
 from core.captions.fonts import find_font_path
-from core.exceptions import check_cancelled, run_interruptible_cmd
+from core.exceptions import check_cancelled, run_cmd, run_interruptible_cmd
 from core.options import ProcessingOptions
 
 # Ordem de preferencia dos encoders de hardware.
@@ -58,7 +58,7 @@ def _probe_encoder(ffmpeg: str, encoder: str) -> bool:
         "-",
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        result = run_cmd(cmd, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return False
     return result.returncode == 0
@@ -142,7 +142,7 @@ def _probe_has_audio(video_path: str) -> bool:
         "-show_entries", "stream=index", "-of", "csv=p=0", str(video_path),
     ]
     try:
-        out = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        out = run_cmd(cmd, timeout=30)
     except (OSError, subprocess.SubprocessError):
         return True
     return bool(out.stdout.strip())

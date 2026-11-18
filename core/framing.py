@@ -132,7 +132,13 @@ def probe_size(video_path: str) -> tuple[int, int]:
     ]
     try:
         out = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=30, creationflags=_NO_WINDOW
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            creationflags=_NO_WINDOW,
         ).stdout.strip()
         w, h = out.splitlines()[0].split("x")[:2]
         return int(w), int(h)
