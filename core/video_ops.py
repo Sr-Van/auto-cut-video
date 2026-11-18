@@ -16,7 +16,7 @@ from core.exceptions import (
     run_interruptible_cmd,
 )
 from core.options import ProcessingOptions
-from utils.timefmt import clamp_seconds, hhmmss_to_seconds
+from utils.timefmt import clamp_seconds, hhmmss_to_seconds, seconds_to_hhmmss
 
 
 def _require_ffmpeg() -> str:
@@ -70,7 +70,7 @@ def cut_clip(
     end: str,
     total_duration: float,
     out_path: str,
-    padding_s: float = 5.0,
+    padding_s: float = 0.3,
     cancel_event: Event | None = None,
 ) -> str:
     check_cancelled(cancel_event)
@@ -231,10 +231,42 @@ def _process_vertical(
         if layout.has_text
         else ""
     )
+    need_words = bool(options.captions_enabled or layout.dynamic)
+    words = (
+        _clip_words(
+            video_path,
+            cut_start,
+            cut_end,
+            Path(out_path).parent,
+            index,
+            options,
+            segments,
+            cancel_event=cancel_event,
+        )
+        if need_words
+        else []
+    )
+    if not words and layout.dynamic and options.caption_transcribe_mode != "clip":
+        words = _transcribe_clip_words(
+            video_path,
+            cut_start,
+            cut_end,
+            Path(out_path).parent,
+            index,
+            options=options,
+            cancel_event=cancel_event,
+        )
+
     plan = None
     if layout.needs_vision:
         speech_words = (
-            captions.words_in_window(segments, cut_start, cut_end) if segments else []
+            words
+            if words
+            else (
+                captions.words_in_window(segments, cut_start, cut_end)
+                if segments
+                else []
+            )
         )
         plan = framing.analyze_clip(
             video_path,
@@ -248,38 +280,28 @@ def _process_vertical(
                 "video": cache.video_hash(video_path),
                 "window": [round(cut_start, 3), round(cut_end, 3)],
                 "layout": layout.id,
+                "has_words": bool(speech_words),
             },
         )
     check_cancelled(cancel_event)
     extra = {"plan": plan, "band_text": band_text}
 
-    if options.captions_enabled:
-        words = _clip_words(
-            video_path,
-            cut_start,
-            cut_end,
-            Path(out_path).parent,
-            index,
-            options,
-            segments,
-            cancel_event=cancel_event,
-        )
-        if words:
-            with tempfile.TemporaryDirectory(prefix="autocut_caps_") as tmp_dir:
-                # Tamanho e posicao da legenda dependem do formato escolhido.
-                ass_path = _write_clip_captions(
-                    words, layouts.caption_options(options), tmp_dir
-                )
-                return render.render_clip(
-                    video_path,
-                    cut_start,
-                    cut_end,
-                    out_path,
-                    options=options,
-                    ass_path=ass_path,
-                    cancel_event=cancel_event,
-                    **extra,
-                )
+    if options.captions_enabled and words:
+        with tempfile.TemporaryDirectory(prefix="autocut_caps_") as tmp_dir:
+            # Tamanho e posicao da legenda dependem do formato escolhido.
+            ass_path = _write_clip_captions(
+                words, layouts.caption_options(options), tmp_dir
+            )
+            return render.render_clip(
+                video_path,
+                cut_start,
+                cut_end,
+                out_path,
+                options=options,
+                ass_path=ass_path,
+                cancel_event=cancel_event,
+                **extra,
+            )
 
     return render.render_clip(
         video_path,
@@ -357,6 +379,12 @@ def cut_all(
     jobs = []
     used_names: set[str] = set()
     for idx, clip in enumerate(clips, start=1):
+        cut_start, cut_end = _cut_window(
+            clip["start"], clip["end"], total_duration, options.padding_s
+        )
+        clip["cut_start"] = seconds_to_hhmmss(cut_start)
+        clip["cut_end"] = seconds_to_hhmmss(cut_end)
+        clip["cut_duration_s"] = round(max(0.0, cut_end - cut_start), 2)
         category = clip.get("category", "CORTE")
         fallback = f"clip_{idx:03d}_{category}"
         base_name = _safe_filename(clip.get("title"), fallback)

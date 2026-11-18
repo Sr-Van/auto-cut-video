@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from threading import Event
 
-from core import ai_analyzer, audio, cache, downloader, transcriber, video_ops
+from core import ai_analyzer, audio, cache, downloader, layouts, transcriber, video_ops
 from core.config import BASE_DIR, OUTPUT_DIR
 from core.exceptions import PipelineCancelledError, check_cancelled
 from core.options import ProcessingOptions
@@ -74,13 +74,17 @@ def run(
         out_root = Path(output_dir) if output_dir else OUTPUT_DIR
         out_dir = out_root / video_stem
 
+        layout = layouts.get_layout(options.layout_id)
+        need_full_words = (
+            options.captions_enabled or layout.dynamic
+        ) and options.caption_transcribe_mode == "full"
+
         key = cache.make_key(
             video_path,
             options.whisper_model,
             options.language,
             options.whisper_compute_type,
-            word_timestamps=options.captions_enabled
-            and options.caption_transcribe_mode == "full",
+            word_timestamps=need_full_words,
         )
 
         segments = None if force else cache.load_transcript(out_dir, key)
@@ -103,8 +107,7 @@ def run(
                 _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
                 segments = transcriber.transcribe(
                     audio_path,
-                    word_timestamps=options.captions_enabled
-                    and options.caption_transcribe_mode == "full",
+                    word_timestamps=need_full_words,
                     model_name=options.whisper_model,
                     language=options.language,
                     compute_type=options.whisper_compute_type,

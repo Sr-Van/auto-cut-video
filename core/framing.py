@@ -32,7 +32,7 @@ import threading
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-ALGO_VERSION = 6
+ALGO_VERSION = 7
 SAMPLE_FPS = 4.0
 ANALYSIS_WIDTH = 320
 MIN_SHOT_S = 1.5
@@ -730,8 +730,13 @@ def analyze_clip(video_path: str, start: float, end: float, words=None,
                  want_cam: bool = False, cache_path: Path | None = None,
                  cache_key: dict | None = None, dynamic: bool = False) -> FramingPlan:
     """Plano de enquadramento da janela [start, end] (tempos do plano sao relativos)."""
-    key = dict(cache_key or {}, algo=ALGO_VERSION, want_cam=bool(want_cam),
-               dynamic=bool(dynamic))
+    key = dict(
+        cache_key or {},
+        algo=ALGO_VERSION,
+        want_cam=bool(want_cam),
+        dynamic=bool(dynamic),
+        has_words=bool(words),
+    )
     if cache_path is not None and cache_path.is_file():
         try:
             data = json.loads(cache_path.read_text(encoding="utf-8"))

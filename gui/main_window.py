@@ -1426,7 +1426,8 @@ class MainWindow(QMainWindow):
         kicker.addWidget(
             label(
                 format_clip_interval(
-                    clip.get("start", "—"), clip.get("end", "—")
+                    clip.get("cut_start") or clip.get("start", "—"),
+                    clip.get("cut_end") or clip.get("end", "—"),
                 ),
                 "ClipTime",
             )
