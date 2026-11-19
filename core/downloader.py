@@ -1,7 +1,7 @@
+import os
+import re
 from pathlib import Path
 from threading import Event
-
-import os
 
 import yt_dlp
 
@@ -9,6 +9,29 @@ from core.config import BASE_DIR
 from core.exceptions import PipelineCancelledError, check_cancelled
 
 OUTPUT_DIR = str(BASE_DIR / "temp")
+_YT_ID_RE = re.compile(
+    r"(?:v=|youtu\.be/|/shorts/|/live/|/embed/)([A-Za-z0-9_-]{11})"
+)
+
+
+def _extract_youtube_id(url: str) -> str | None:
+    match = _YT_ID_RE.search(url or "")
+    return match.group(1) if match else None
+
+
+def _find_existing_download(diretorio_saida: str, video_id: str | None) -> str | None:
+    if not video_id:
+        return None
+    out_dir = Path(diretorio_saida)
+    if not out_dir.is_dir():
+        return None
+    for candidate in sorted(out_dir.glob(f"*.{video_id}.mp4")):
+        try:
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return str(candidate)
+        except OSError:
+            continue
+    return None
 
 
 def download_video(
@@ -18,6 +41,12 @@ def download_video(
     cancel_event: Event | None = None,
 ) -> str | None:
     check_cancelled(cancel_event)
+    Path(diretorio_saida).mkdir(parents=True, exist_ok=True)
+    existing = _find_existing_download(diretorio_saida, _extract_youtube_id(url))
+    if existing:
+        if progress_callback is not None:
+            progress_callback("baixando", 100, "Vídeo já baixado, reutilizando...")
+        return existing
 
     last_percent = -1
     partial_files: set[str] = set()

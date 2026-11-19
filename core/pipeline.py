@@ -46,6 +46,7 @@ def run(
         raise ValueError("Informe yt_link ou video_path.")
 
     try:
+        out_root = Path(output_dir) if output_dir else OUTPUT_DIR
         if yt_link:
             _emit(progress_callback, "baixando", 0, "Baixando video...")
 
@@ -59,9 +60,10 @@ def run(
                 last_scaled[0] = scaled
                 _emit(progress_callback, stage, scaled, message)
 
+            downloads_dir = out_root / "_downloads"
             video_path = downloader.download_video(
                 yt_link,
-                diretorio_saida=output_dir or str(OUTPUT_DIR),
+                diretorio_saida=str(downloads_dir),
                 progress_callback=download_progress if progress_callback else None,
                 cancel_event=cancel_event,
             )
@@ -71,7 +73,6 @@ def run(
         check_cancelled(cancel_event)
         video_path = str(video_path)
         video_stem = Path(video_path).stem
-        out_root = Path(output_dir) if output_dir else OUTPUT_DIR
         out_dir = out_root / video_stem
 
         layout = layouts.get_layout(options.layout_id)
@@ -134,19 +135,39 @@ def run(
 
         check_cancelled(cancel_event)
         if segments:
-            focus = options.focus_instruction
-            msg = (
-                f"Analisando com IA (foco: {focus[:60]})..."
-                if focus
-                else "Analisando com IA..."
+            analysis_key = cache.make_analysis_key(
+                key,
+                focus=options.focus_instruction,
+                max_clips=options.max_clips,
+                min_viral_score=options.min_viral_score,
+                min_clip_duration=options.min_clip_duration,
+                max_clip_duration=options.max_clip_duration,
+                ai_model=options.ai_model,
             )
-            _emit(progress_callback, "analise", 50, msg)
-            clips = ai_analyzer.analyze(
-                segments,
-                progress_callback=progress_callback,
-                options=options,
-                cancel_event=cancel_event,
-            )
+            cached_clips = None if force else cache.load_analysis(out_dir, analysis_key)
+            if cached_clips is not None:
+                _emit(
+                    progress_callback,
+                    "analise",
+                    60,
+                    "Análise de IA em cache, pulando...",
+                )
+                clips = cached_clips
+            else:
+                focus = options.focus_instruction
+                msg = (
+                    f"Analisando com IA (foco: {focus[:60]})..."
+                    if focus
+                    else "Analisando com IA..."
+                )
+                _emit(progress_callback, "analise", 50, msg)
+                clips = ai_analyzer.analyze(
+                    segments,
+                    progress_callback=progress_callback,
+                    options=options,
+                    cancel_event=cancel_event,
+                )
+                cache.save_analysis(out_dir, analysis_key, clips)
         else:
             clips = []
 

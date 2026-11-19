@@ -132,7 +132,8 @@ def _transcribe_clip_words(
         options.language,
         options.whisper_compute_type,
     )
-    path = cache.clip_transcript_path(cache_dir, index)
+    win_tag = cache.window_hash(video_path, cut_start, cut_end)
+    path = cache.clip_transcript_path(cache_dir, win_tag)
 
     segments = cache.load_transcript_file(path, key)
     if segments is None:
@@ -252,6 +253,7 @@ def _process_vertical(
                 else []
             )
         )
+        win_tag = cache.window_hash(video_path, cut_start, cut_end)
         plan = framing.analyze_clip(
             video_path,
             cut_start,
@@ -259,7 +261,9 @@ def _process_vertical(
             words=speech_words,
             want_cam=any(s.kind in ("cam", "content") for s in layout.slots),
             dynamic=layout.dynamic,
-            cache_path=Path(out_path).parent / ".cache" / f"framing_{index:03d}.json",
+            cache_path=cache.framing_cache_path(
+                Path(out_path).parent / ".cache", win_tag
+            ),
             cache_key={
                 "video": cache.video_hash(video_path),
                 "window": [round(cut_start, 3), round(cut_end, 3)],

@@ -48,12 +48,86 @@ def make_clip_key(
     return key
 
 
+def window_hash(video_path: str, start_s: float, end_s: float) -> str:
+    """Hash deterministico curto para identificar a janela [start_s, end_s] de um video."""
+    raw = f"{video_hash(video_path)}|{round(float(start_s), 3):.3f}|{round(float(end_s), 3):.3f}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
 def transcript_path(out_dir) -> Path:
     return Path(out_dir) / TRANSCRIPT_FILENAME
 
 
-def clip_transcript_path(cache_dir, index: int) -> Path:
-    return Path(cache_dir) / f"clip_{int(index):03d}.json"
+def clip_transcript_path(cache_dir, index_or_tag: int | str) -> Path:
+    if isinstance(index_or_tag, int):
+        return Path(cache_dir) / f"clip_{index_or_tag:03d}.json"
+    return Path(cache_dir) / f"clip_{str(index_or_tag)}.json"
+
+
+def framing_cache_path(cache_dir, index_or_tag: int | str) -> Path:
+    if isinstance(index_or_tag, int):
+        return Path(cache_dir) / f"framing_{index_or_tag:03d}.json"
+    return Path(cache_dir) / f"framing_{str(index_or_tag)}.json"
+
+
+def make_analysis_key(
+    transcript_key: dict,
+    *,
+    focus: str = "",
+    max_clips: int = 15,
+    min_viral_score: int = 8,
+    min_clip_duration: int = 30,
+    max_clip_duration: int = 90,
+    ai_model: str = "",
+) -> dict:
+    """Chave de cache para a resposta da analise de IA (independe de legenda/layout)."""
+    return {
+        "video_hash": transcript_key.get("video_hash", ""),
+        "whisper_model": transcript_key.get("whisper_model", ""),
+        "language": transcript_key.get("language", ""),
+        "focus": " ".join((focus or "").split()),
+        "max_clips": int(max_clips),
+        "min_viral_score": int(min_viral_score),
+        "min_clip_duration": int(min_clip_duration),
+        "max_clip_duration": int(max_clip_duration),
+        "ai_model": str(ai_model or "").strip(),
+    }
+
+
+def analysis_cache_path(out_dir, analysis_key: dict) -> Path:
+    canonical = json.dumps(analysis_key, sort_keys=True, ensure_ascii=False)
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return Path(out_dir) / ".cache" / f"analysis_{digest}.json"
+
+
+def save_analysis(out_dir, analysis_key: dict, clips: list[dict]) -> Path:
+    path = analysis_cache_path(out_dir, analysis_key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "key": analysis_key,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "clips": clips,
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return path
+
+
+def load_analysis(out_dir, analysis_key: dict) -> list[dict] | None:
+    path = analysis_cache_path(out_dir, analysis_key)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("key") != analysis_key:
+        return None
+    clips = data.get("clips")
+    if not isinstance(clips, list):
+        return None
+    return [dict(c) for c in clips if isinstance(c, dict)]
 
 
 def _segment_to_dict(segment, index) -> dict:
