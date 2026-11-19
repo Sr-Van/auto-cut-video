@@ -129,6 +129,7 @@ class MainWindow(QMainWindow):
         self.controller.finished.connect(self.on_finished)
         self.controller.failed.connect(self.on_failed)
         self.controller.cancelled.connect(self.on_cancelled)
+        self.controller.review_requested.connect(self._on_review_requested)
 
         root = QWidget()
         root.setObjectName("Root")
@@ -154,6 +155,7 @@ class MainWindow(QMainWindow):
         )
 
         self.settings_view = SettingsDialog(self.options, self, embedded=True)
+        self.settings_view.api_keys_changed.connect(self._refresh_env_status)
         self.settings_view.options_changed.connect(
             self._on_embedded_settings_changed
         )
@@ -458,6 +460,14 @@ class MainWindow(QMainWindow):
         self.captions_checkbox.setChecked(self.options.captions_enabled)
         self.captions_checkbox.toggled.connect(self.on_captions_toggled)
         controls_col.addWidget(self.captions_checkbox)
+
+        self.review_checkbox = Switch("Revisar cortes antes de renderizar")
+        self.review_checkbox.setChecked(self.options.review_before_render)
+        self.review_checkbox.setToolTip(
+            "Pausa após a análise de IA para aprovar cortes e ajustar início/fim antes de renderizar"
+        )
+        self.review_checkbox.toggled.connect(self.on_review_toggled)
+        controls_col.addWidget(self.review_checkbox)
 
         # Formato do short (pre-definido; detalhes e itens auxiliares em Ajustes)
         layout_box = QVBoxLayout()
@@ -991,6 +1001,13 @@ class MainWindow(QMainWindow):
         self._save_options()
         self._refresh_summary()
 
+    def on_review_toggled(self, checked: bool):
+        if self._syncing_quick:
+            return
+        self.options.review_before_render = bool(checked)
+        self._save_options()
+        self._refresh_summary()
+
     def _on_quick_preset_changed(self, index: int):
         if self._syncing_quick or index < 0:
             return
@@ -1121,6 +1138,7 @@ class MainWindow(QMainWindow):
         self._syncing_quick = True
         try:
             self.captions_checkbox.setChecked(o.captions_enabled)
+            self.review_checkbox.setChecked(o.review_before_render)
             target_pid = active_preset_id if active_preset_id in VIRAL_PRESETS else "__custom__"
             for idx in range(self.quick_preset_combo.count()):
                 if self.quick_preset_combo.itemData(idx) == target_pid:
@@ -1202,6 +1220,7 @@ class MainWindow(QMainWindow):
             step.set_state("idle")
 
         self.options.captions_enabled = self.captions_checkbox.isChecked()
+        self.options.review_before_render = self.review_checkbox.isChecked()
         self.options.focus_instruction = self.focus_input.toPlainText().strip()
 
         self.worker = self.controller.start_pipeline(
@@ -1240,6 +1259,7 @@ class MainWindow(QMainWindow):
         self.settings_button.setEnabled(not busy)
         self.summary_edit_button.setEnabled(not busy)
         self.captions_checkbox.setEnabled(not busy)
+        self.review_checkbox.setEnabled(not busy)
         self.quick_preset_combo.setEnabled(not busy)
         self.quick_max_clips.setEnabled(not busy)
         self.quick_min_score.setEnabled(not busy)
@@ -1322,6 +1342,17 @@ class MainWindow(QMainWindow):
                 "Nenhum corte atingiu a nota mínima. Reduza 'Nota mín.' ou o "
                 "direcionamento da IA e processe de novo (a transcrição fica em cache)."
             )
+
+    def _on_review_requested(self, clips):
+        from PySide6.QtWidgets import QDialog
+
+        from gui.review_dialog import ClipReviewDialog
+
+        dialog = ClipReviewDialog(list(clips or []), self)
+        if dialog.exec() == QDialog.Accepted:
+            self.controller.submit_review(dialog.selected_clips())
+        else:
+            self.controller.submit_review([])
 
     def on_cancelled(self, message: str):
         self.set_busy(False)
@@ -1475,6 +1506,21 @@ class MainWindow(QMainWindow):
                 )
             )
             actions.addWidget(copy_btn)
+
+        from gui.review_dialog import format_clip_share_text
+
+        share_text = format_clip_share_text(clip)
+        if share_text:
+            copy_meta_btn = QPushButton("Copiar título + descrição")
+            copy_meta_btn.setObjectName("Ghost")
+            copy_meta_btn.setCursor(Qt.PointingHandCursor)
+            copy_meta_btn.clicked.connect(
+                lambda _=False, t=share_text, b=copy_meta_btn: (
+                    QApplication.clipboard().setText(t),
+                    flash_button(b, "✓ Copiado"),
+                )
+            )
+            actions.addWidget(copy_meta_btn)
 
         target_path = path or (
             str(self._result_folder()) if self._result_folder() else ""

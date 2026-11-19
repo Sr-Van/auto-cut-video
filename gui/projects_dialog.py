@@ -351,6 +351,21 @@ class ProjectAccordionItem(QFrame):
             )
             actions.addWidget(copy_btn)
 
+        from gui.review_dialog import format_clip_share_text
+
+        share_text = format_clip_share_text(clip)
+        if share_text:
+            copy_meta_btn = QPushButton("Copiar título + descrição")
+            copy_meta_btn.setObjectName("Ghost")
+            copy_meta_btn.setCursor(Qt.PointingHandCursor)
+            copy_meta_btn.clicked.connect(
+                lambda _=False, t=share_text, b=copy_meta_btn: (
+                    QApplication.clipboard().setText(t),
+                    flash_button(b, "✓ Copiado"),
+                )
+            )
+            actions.addWidget(copy_meta_btn)
+
         post_btn = QPushButton("Postar")
         post_btn.setObjectName("Ghost")
         post_btn.setCursor(Qt.PointingHandCursor)

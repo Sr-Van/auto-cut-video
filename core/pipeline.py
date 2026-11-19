@@ -38,6 +38,7 @@ def run(
     force=False,
     options: ProcessingOptions | None = None,
     cancel_event: Event | None = None,
+    review_callback=None,
 ):
     options = (options or ProcessingOptions.from_env_or_config()).normalize()
     check_cancelled(cancel_event)
@@ -182,6 +183,16 @@ def run(
             options.max_clip_duration,
             options.pause_gap,
         )
+
+        if options.review_before_render and review_callback is not None and clips:
+            _emit(progress_callback, "revisao", 68, "Aguardando revisão dos cortes pelo usuário...")
+            reviewed = review_callback(list(clips))
+            check_cancelled(cancel_event)
+            if not reviewed:
+                from core.exceptions import PipelineCancelledError
+
+                raise PipelineCancelledError("Nenhum corte selecionado na revisão.")
+            clips = list(reviewed)
 
         check_cancelled(cancel_event)
         _emit(progress_callback, "corte", 70, "Cortando clipes...")

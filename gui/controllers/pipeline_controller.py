@@ -18,6 +18,7 @@ class PipelineController(QObject):
     finished = Signal(object)
     failed = Signal(str)
     cancelled = Signal(str)
+    review_requested = Signal(object)
 
     def __init__(self, parent: QObject | None = None, settings: QSettings | None = None):
         super().__init__(parent)
@@ -74,8 +75,13 @@ class PipelineController(QObject):
         self.worker.finished.connect(self.finished)
         self.worker.failed.connect(self.failed)
         self.worker.cancelled.connect(self.cancelled)
+        self.worker.review_requested.connect(self.review_requested)
         self.worker.start()
         return self.worker
+
+    def submit_review(self, clips: list[dict] | None) -> None:
+        if self.worker is not None:
+            self.worker.submit_review(clips)
 
     def cancel_pipeline(self) -> bool:
         if self.worker is not None and self.worker.isRunning():
