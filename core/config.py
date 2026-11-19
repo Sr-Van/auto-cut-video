@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = BASE_DIR / ".env"
 OUTPUT_DIR = BASE_DIR / "output"
 
 # Catalogo de provedores compativeis com o padrao OpenAI (/chat/completions).
@@ -156,6 +157,60 @@ def _load_api_keys() -> list[str]:
 API_KEYS = _load_api_keys()
 # Mantido por compatibilidade (primeira chave configurada).
 API_KEY = API_KEYS[0] if API_KEYS else ""
+
+
+def mask_api_key(raw_key: str) -> str:
+    """Mascara uma chave de API para exibicao segura na interface."""
+    prov, clean = detect_provider(raw_key)
+    if len(clean) <= 8:
+        masked = "•" * max(4, len(clean))
+    else:
+        masked = f"{clean[:4]}••••{clean[-4:]}"
+    prov_name = PROVIDERS_CATALOG.get(prov, {}).get("name", prov)
+    return f"{prov_name} · {masked}"
+
+
+def reload_api_keys(dotenv_path: Path | None = None) -> list[str]:
+    """Recarrega chaves do .env e do ambiente sem reiniciar o processo."""
+    global API_KEY
+    path = Path(dotenv_path) if dotenv_path is not None else ENV_FILE
+    if path.is_file():
+        load_dotenv(path, override=True)
+    fresh = _load_api_keys()
+    API_KEYS[:] = fresh
+    API_KEY = API_KEYS[0] if API_KEYS else ""
+    try:
+        from core.providers.factory import reset_live_models_cache
+
+        reset_live_models_cache()
+    except Exception:
+        pass
+    return list(API_KEYS)
+
+
+def save_api_keys(keys: list[str], dotenv_path: Path | None = None) -> list[str]:
+    """Persiste chaves em .env (variavel API_KEYS) e recarrega em memoria."""
+    path = Path(dotenv_path) if dotenv_path is not None else ENV_FILE
+    cleaned = [k.strip() for k in keys if k and k.strip()]
+
+    existing_lines: list[str] = []
+    if path.is_file():
+        existing_lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    # Remove linhas antigas de API_KEYS para substituir pela nova lista.
+    kept = [
+        line for line in existing_lines
+        if not re.match(r"^\s*API_KEYS\s*=", line)
+    ]
+    if cleaned:
+        kept.append(f"API_KEYS={','.join(cleaned)}")
+        os.environ["API_KEYS"] = ",".join(cleaned)
+    else:
+        os.environ.pop("API_KEYS", None)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(kept).rstrip() + ("\n" if kept else ""), encoding="utf-8")
+    return reload_api_keys(path)
 
 # Modelos Gemini reais (mantido por compatibilidade com imports existentes).
 MODELOS_GEMINI = list(PROVIDERS_CATALOG["google"]["models"])

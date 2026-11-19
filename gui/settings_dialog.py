@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QFileDialog,
     QMessageBox,
@@ -145,6 +146,7 @@ class SettingsDialog(QDialog):
     """Configurações completas de Vídeo, Legenda e Cortes/IA."""
 
     options_changed = Signal(object)
+    api_keys_changed = Signal()
 
     def __init__(
         self,
@@ -905,6 +907,51 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(grid2)
 
+        self.review_before_render = Switch("Revisar cortes antes de renderizar")
+        self.review_before_render.setToolTip(
+            "Pausa após a análise de IA para você aprovar cortes e ajustar início/fim antes de renderizar"
+        )
+        layout.addWidget(self.review_before_render)
+        layout.addWidget(separator())
+        layout.addWidget(label("CHAVES DE API (.env)", "SectionTitle"))
+
+        self.api_keys_list = QListWidget()
+        self.api_keys_list.setMaximumHeight(96)
+        self.api_keys_list.setToolTip("Chaves de API configuradas localmente no arquivo .env")
+        layout.addWidget(self.api_keys_list)
+
+        key_row = QHBoxLayout()
+        key_row.setSpacing(8)
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        self.api_key_input.setPlaceholderText(
+            "Cole uma chave (AIza..., gsk_..., sk-or-..., csk-...) ou provedor:chave"
+        )
+        key_row.addWidget(self.api_key_input, 1)
+
+        self.add_api_key_btn = QPushButton("Adicionar")
+        self.add_api_key_btn.setProperty("variant", "secondary")
+        self.add_api_key_btn.setCursor(Qt.PointingHandCursor)
+        self.add_api_key_btn.clicked.connect(self._on_add_api_key)
+        key_row.addWidget(self.add_api_key_btn)
+
+        self.test_api_key_btn = QPushButton("Testar")
+        self.test_api_key_btn.setProperty("variant", "ghost")
+        self.test_api_key_btn.setCursor(Qt.PointingHandCursor)
+        self.test_api_key_btn.clicked.connect(self._on_test_api_key)
+        key_row.addWidget(self.test_api_key_btn)
+
+        self.remove_api_key_btn = QPushButton("Remover")
+        self.remove_api_key_btn.setProperty("variant", "ghost")
+        self.remove_api_key_btn.setCursor(Qt.PointingHandCursor)
+        self.remove_api_key_btn.clicked.connect(self._on_remove_api_key)
+        key_row.addWidget(self.remove_api_key_btn)
+        layout.addLayout(key_row)
+
+        self.api_key_status = label("", "Muted", wrap=True)
+        layout.addWidget(self.api_key_status)
+        self._refresh_api_keys_list()
+
         note = label(
             "A IA seleciona trechos independentes que atinjam a nota mínima até o limite configurado. "
             "Os cortes são ajustados automaticamente em pausas naturais da fala.",
@@ -914,6 +961,87 @@ class SettingsDialog(QDialog):
         layout.addWidget(note)
         layout.addStretch(1)
         return pane
+
+    def _refresh_api_keys_list(self) -> None:
+        from core import config as core_config
+
+        self.api_keys_list.clear()
+        for raw_key in core_config.API_KEYS:
+            self.api_keys_list.addItem(core_config.mask_api_key(raw_key))
+        has_keys = bool(core_config.API_KEYS)
+        self.remove_api_key_btn.setEnabled(has_keys)
+        if not has_keys:
+            self.api_key_status.setText("Nenhuma chave configurada. Adicione uma acima para usar a IA.")
+
+    def _on_add_api_key(self) -> None:
+        from core import config as core_config
+
+        raw = self.api_key_input.text().strip()
+        if not raw:
+            self.api_key_status.setText("Cole uma chave de API antes de adicionar.")
+            return
+        prov, _clean = core_config.detect_provider(raw)
+        updated = list(core_config.API_KEYS)
+        if raw not in updated:
+            updated.append(raw)
+        core_config.save_api_keys(updated)
+        self.api_key_input.clear()
+        self._refresh_api_keys_list()
+        self.ai_model.set_keys()
+        prov_name = core_config.PROVIDERS_CATALOG.get(prov, {}).get("name", prov)
+        self.api_key_status.setText(f"Chave {prov_name} salva no .env e ativada.")
+        self.api_keys_changed.emit()
+
+    def _on_remove_api_key(self) -> None:
+        from core import config as core_config
+
+        row = self.api_keys_list.currentRow()
+        if row < 0 or row >= len(core_config.API_KEYS):
+            self.api_key_status.setText("Selecione uma chave na lista para remover.")
+            return
+        updated = list(core_config.API_KEYS)
+        updated.pop(row)
+        core_config.save_api_keys(updated)
+        self._refresh_api_keys_list()
+        self.ai_model.set_keys()
+        self.api_key_status.setText("Chave removida do .env.")
+        self.api_keys_changed.emit()
+
+    def _on_test_api_key(self) -> None:
+        from core import config as core_config
+        from core.providers import build_provider
+
+        raw = self.api_key_input.text().strip()
+        if not raw:
+            row = self.api_keys_list.currentRow()
+            if 0 <= row < len(core_config.API_KEYS):
+                raw = core_config.API_KEYS[row]
+            elif core_config.API_KEYS:
+                raw = core_config.API_KEYS[0]
+        if not raw:
+            self.api_key_status.setText("Informe ou selecione uma chave para testar.")
+            return
+
+        self.test_api_key_btn.setEnabled(False)
+        self.api_key_status.setText("Testando conexão com o provedor...")
+        try:
+            provider = build_provider(raw)
+            try:
+                models = provider.fetch_models()
+            finally:
+                provider.close()
+            if models:
+                self.api_key_status.setText(
+                    f"Conexão OK ({provider.provider_name}): {len(models)} modelo(s) disponível(is)."
+                )
+            else:
+                self.api_key_status.setText(
+                    f"Chave {provider.provider_name} não retornou modelos ativos. Verifique permissão/cota."
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.api_key_status.setText(f"Falha ao testar chave: {exc}")
+        finally:
+            self.test_api_key_btn.setEnabled(True)
 
     def _on_min_duration_changed(self, value: int):
         if (
@@ -1053,6 +1181,7 @@ class SettingsDialog(QDialog):
         self.captions_enabled_toggle.toggled.connect(self._refresh_preview)
         self.caption_uppercase.toggled.connect(self._refresh_preview)
         self.audio_normalize.toggled.connect(self._refresh_preview)
+        self.review_before_render.toggled.connect(self._refresh_preview)
         self.caption_glow.toggled.connect(self._refresh_preview)
         self.caption_italic.toggled.connect(self._refresh_preview)
         self.caption_emphasis.toggled.connect(self._refresh_preview)
@@ -1228,6 +1357,9 @@ class SettingsDialog(QDialog):
             self.audio_normalize.setChecked(
                 bool(getattr(options, "audio_normalize", True))
             )
+            self.review_before_render.setChecked(
+                bool(getattr(options, "review_before_render", False))
+            )
             for index in range(self.resolution.count()):
                 width, height = self.resolution.itemData(index)
                 if (width, height) == (options.width, options.height):
@@ -1296,6 +1428,7 @@ class SettingsDialog(QDialog):
             else self.encoder.currentText()
         )
         options.audio_normalize = self.audio_normalize.isChecked()
+        options.review_before_render = self.review_before_render.isChecked()
         res_data = self.resolution.currentData()
         if res_data:
             options.width, options.height = res_data

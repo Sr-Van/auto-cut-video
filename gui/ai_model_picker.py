@@ -78,6 +78,18 @@ class AIModelPicker(QWidget):
         self._select_value()
 
     # --- lista -----------------------------------------------------------
+    def set_keys(self, keys: list[str] | None = None) -> None:
+        from core import config as core_config
+
+        self._keys = list(core_config.API_KEYS if keys is None else keys)
+        has_keys = bool(self._keys)
+        self.combo.setEnabled(has_keys)
+        self.refresh_btn.setEnabled(has_keys)
+        self.combo.setToolTip("" if has_keys else "Nenhuma API key configurada")
+        self._populate(list_available_models(self._keys, live=False))
+        if has_keys:
+            self.refresh()
+
     def refresh(self) -> None:
         if self._job is not None:
             return
