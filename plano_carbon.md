@@ -107,13 +107,13 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
 
 ### Fase 4 (P1) · Escalabilidade de IA para Lives Longas, Catálogo e Cache
 
-- [ ] **4.1. Higienizar catálogo de modelos e validar disponibilidade em `resolve_targets`**
+- [x] **4.1. Higienizar catálogo de modelos e validar disponibilidade em `resolve_targets`**
   - **Arquivos:** `core/config.py` (`PROVIDERS_CATALOG`), `core/providers/factory.py` (`resolve_targets`), `tests/test_providers.py`.
   - **Problema:** `PROVIDERS_CATALOG["google"]["models"]` contém IDs especulativos/inexistentes (ex.: `gemini-3.8-flash`, `gemini-3.6-flash`) à frente de modelos válidos, causando múltiplos `HTTP 404` desnecessários antes de acertar um modelo ativo, pois `resolve_targets` não valida contra `fetch_models`.
   - **Solução:** Revisar e manter em `PROVIDERS_CATALOG` apenas modelos reais vigentes, priorizando os mais confiáveis para JSON estruturado, e adicionar cache de sessão opcional de modelos ativos retornados por `/models` para pular modelos inexistentes logo no agendamento.
   - **Critério de aceite:** Primeira chamada por provedor configurado evita `404` em cascata mantendo compatibilidade com os mocks em `tests/test_providers.py`.
 
-- [ ] **4.2. Chunking inteligente de transcrições longas (podcasts/lives de 2h–4h)**
+- [x] **4.2. Chunking inteligente de transcrições longas (podcasts/lives de 2h–4h)**
   - **Arquivos:** `core/ai_analyzer.py` (`build_transcript_block`, `analyze`), novo helper de janelamento + testes dedicados.
   - **Problema:** Enviar 100% da transcrição numa única chamada estoura o TPM gratuito de provedores como Groq (`413` / rate limit por tokens) em vídeos de 2h+ e provoca perda de atenção no meio do vídeo (*lost-in-the-middle*).
   - **Solução:**
@@ -122,7 +122,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Consolidar os candidatos de todas as janelas, deduplicar sobreposições mantendo o maior `viral_score` e truncar para `max_clips`.
   - **Critério de aceite:** Vídeos longos (2h+) são analisados sem erro `413`, distribuindo cortes de alta qualidade do início ao fim da gravação.
 
-- [ ] **4.3. Cache por hash de janela, cache da análise de IA e organização de downloads**
+- [x] **4.3. Cache por hash de janela, cache da análise de IA e organização de downloads**
   - **Arquivos:** `core/cache.py`, `core/video_ops.py`, `core/pipeline.py`, `core/downloader.py`, `tests/test_cache.py`.
   - **Problema:**
     - `clip_001.json` e `framing_001.json` usam índice ordinal no nome do arquivo: se os cortes mudarem de ordem ou quantidade, o cache invalida e sobrescreve o anterior.
