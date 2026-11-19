@@ -175,7 +175,22 @@ GEMINI_TIMEOUT_S = AI_TIMEOUT_S
 GEMINI_BACKOFF_BASE = AI_BACKOFF_BASE
 GEMINI_BACKOFF_MAX = AI_BACKOFF_MAX
 
-WHISPER_MODEL = os.getenv("WHISPER_MODEL", "large")
+def default_whisper_model() -> str:
+    """Retorna WHISPER_MODEL do ambiente ou escolhe 'large' (CUDA) / 'turbo' (CPU)."""
+    env_val = os.getenv("WHISPER_MODEL", "").strip()
+    if env_val:
+        return env_val
+    try:
+        import ctranslate2
+
+        if ctranslate2.get_cuda_device_count() > 0:
+            return "large"
+    except Exception:
+        pass
+    return "turbo"
+
+
+WHISPER_MODEL = default_whisper_model()
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "auto")
 TEMPERATURA = 0.3
 PADDING_S = float(os.getenv("PADDING_S", "0.3"))

@@ -105,6 +105,21 @@ def run(
 
                 check_cancelled(cancel_event)
                 _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
+                last_trans_pct = [20]
+
+                def transcribe_progress(frac: float) -> None:
+                    check_cancelled(cancel_event)
+                    pct = 20 + int(frac * 28)
+                    if pct <= last_trans_pct[0]:
+                        return
+                    last_trans_pct[0] = pct
+                    _emit(
+                        progress_callback,
+                        "transcricao",
+                        pct,
+                        f"Transcrevendo audio... {int(round(frac * 100))}%",
+                    )
+
                 segments = transcriber.transcribe(
                     audio_path,
                     word_timestamps=need_full_words,
@@ -112,6 +127,7 @@ def run(
                     language=options.language,
                     compute_type=options.whisper_compute_type,
                     cancel_event=cancel_event,
+                    progress_callback=transcribe_progress if progress_callback else None,
                 )
 
             cache.save_transcript(out_dir, key, segments)
