@@ -172,7 +172,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
 
 ### Fase 6 (P2) · Manutenibilidade, Limpeza e Testes de Integração
 
-- [ ] **6.1. Remoção de código morto e modularização da camada `gui/`**
+- [x] **6.1. Remoção de código morto e modularização da camada `gui/`**
   - **Arquivos:** `core/captions/ass_writer.py`, `core/config.py`, `core/ai_analyzer.py`, `gui/main_window.py`, `gui/settings_dialog.py`, `gui/widgets.py`.
   - **Problema:**
     - Existem trechos sem uso ativo (`generate_swing_tags` em `ass_writer.py`, combo oculto `self.caption_preset` e método `_apply_preset` em `settings_dialog.py`, e aliases legados `GEMINI_*` / `_KeyTarget`).
@@ -182,7 +182,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Extrair componentes independentes (`gui/phone_preview.py`, `gui/font_combo.py`, `gui/result_card.py`, `gui/settings_tabs/`), mantendo imports públicos preservados.
   - **Critério de aceite:** Toda a suíte `pytest` passa após a modularização, com módulos de GUI abaixo de ~500 linhas por arquivo.
 
-- [ ] **6.2. Testes de integração do pipeline e receita de empacotamento Windows (`.exe`)**
+- [x] **6.2. Testes de integração do pipeline e receita de empacotamento Windows (`.exe`)**
   - **Arquivos:** `tests/test_pipeline_integration.py`, `tests/test_video_ops.py`, documentação/spec de build (`build/` ou `README.md`).
   - **Problema:** Os testes unitários atuais cobrem bem módulos isolados, mas não exercitam `core.pipeline.run` e `core.video_ops._process_vertical` de ponta a ponta (justamente onde surgiu o bug silencioso do `follow_dynamic`). Além disso, ainda falta definir o empacotamento standalone mencionado em `PRODUCT.md`.
   - **Solução:**
