@@ -385,10 +385,6 @@ class SettingsDialog(QDialog):
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(10)
 
-        self.caption_preset = QComboBox()
-        self.caption_preset.addItems(list(PRESETS.keys()))
-        self.caption_preset.setVisible(False)
-
         self.caption_font = FontComboBox()
         self._populate_font_combo()
         grid.addWidget(_field_box("Fonte", self.caption_font), 0, 0)
@@ -1411,10 +1407,6 @@ class SettingsDialog(QDialog):
             self._syncing_preset = False
         self._sync_font_samples(options)
         self._update_preset_status(options)
-
-    def _apply_preset(self):
-        name = self.caption_preset.currentText()
-        self._on_preset_card_selected(name)
 
     def _write_into(self, options: ProcessingOptions):
         options.zoom = self.zoom.value()

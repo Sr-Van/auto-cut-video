@@ -73,56 +73,6 @@ def word_span(block: CaptionBlock, index: int) -> tuple[float, float]:
     return start, end
 
 
-def generate_swing_tags(
-    ev_start: float,
-    ev_end: float,
-    block_start: float,
-    max_angle: float = 2.5,
-    half_period_ms: int = 260,
-) -> str:
-    """Gera sequencia continua de tags \\frz e \\t para balanco pendular sincronizado no bloco."""
-    h = max(50, int(half_period_ms))
-    q = h // 2
-    a = float(max_angle)
-
-    def angle_at(tau: float) -> float:
-        if tau <= 0:
-            return 0.0
-        if tau <= q:
-            return a * (tau / q)
-        u = tau - q
-        m = int(u // h)
-        r = u % h
-        if m % 2 == 0:
-            return a - 2.0 * a * (r / h)
-        return -a + 2.0 * a * (r / h)
-
-    tau_s = max(0.0, (ev_start - block_start) * 1000.0)
-    tau_e = max(tau_s + 10.0, (ev_end - block_start) * 1000.0)
-    dur = tau_e - tau_s
-
-    init_angle = angle_at(tau_s)
-    parts = [f"\\frz{_num(init_angle)}"]
-
-    k_start = max(0, int((tau_s - q) // h) + 1) if tau_s > q else (1 if tau_s <= 0 else 0)
-    curr_t = q if tau_s < q else q + k_start * h
-    prev_rel = 0
-    while curr_t < tau_e:
-        if curr_t > tau_s:
-            rel = int(round(curr_t - tau_s))
-            target_angle = angle_at(curr_t)
-            parts.append(f"\\t({prev_rel},{rel},\\frz{_num(target_angle)})")
-            prev_rel = rel
-        curr_t += h
-
-    final_rel = int(round(dur))
-    if final_rel > prev_rel:
-        final_angle = angle_at(tau_e)
-        parts.append(f"\\t({prev_rel},{final_rel},\\frz{_num(final_angle)})")
-
-    return "".join(parts)
-
-
 def _word_width(word: CaptionWord, options: ProcessingOptions, font) -> float:
     if word.width > 0:
         return word.width
