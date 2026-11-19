@@ -138,7 +138,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
 
 ### Fase 5 (P2) · UX do Criador e Segurança do Web Studio
 
-- [ ] **5.1. Gerenciador de API Keys na própria interface gráfica**
+- [x] **5.1. Gerenciador de API Keys na própria interface gráfica**
   - **Arquivos:** `core/config.py` (`reload_api_keys`), `gui/settings_dialog.py`, `gui/main_window.py`, `gui/ai_model_picker.py`.
   - **Problema:** Hoje `API_KEYS` é lido uma única vez na importação de `core/config.py`. Criadores não-técnicos precisam editar `.env` manualmente e reiniciar o programa — um bloqueio direto caso o app seja distribuído como `.exe`.
   - **Solução:**
@@ -146,7 +146,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Persistir de forma segura localmente (ou atualizar `.env` do workspace com reload dinâmico via `reload_api_keys()`), atualizando imediatamente o `AIModelPicker` e o badge de status na tela principal sem reiniciar.
   - **Critério de aceite:** Usuário configura uma chave pela GUI, testa a conexão, escolhe o modelo e processa sem editar arquivos nem reiniciar o app.
 
-- [ ] **5.2. Fluxo de revisão pré-render e atalhos de publicação**
+- [x] **5.2. Fluxo de revisão pré-render e atalhos de publicação**
   - **Arquivos:** `gui/main_window.py`, `gui/projects_dialog.py`, `gui/controllers/pipeline_controller.py`.
   - **Problema:**
     - Nos cards de corte, há `"Copiar caminho"`, mas não há botão para copiar **Título + Descrição** formatados para colar no YouTube Shorts / TikTok / Reels.
@@ -156,7 +156,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Adicionar modo opcional `"Revisar cortes antes de renderizar"` (checkbox na configuração rápida ou Ajustes): pausa o fluxo após a análise/normalização, exibe a lista com checkbox de aprovação + ajuste fino de `start`/`end` e botão `"Renderizar selecionados"`.
   - **Critério de aceite:** Cópia de título + descrição funciona com feedback visual nos dois painéis; revisão pré-render permite renderizar apenas os cortes aprovados com tempos ajustados.
 
-- [ ] **5.3. Endurecimento de segurança e cancelamento no Web Studio (`site/server.py`)**
+- [x] **5.3. Endurecimento de segurança e cancelamento no Web Studio (`site/server.py`)**
   - **Arquivos:** `site/server.py`, `site/assets/studio.js`.
   - **Problema:**
     - Os endpoints `POST /api/run` e `POST /api/upload` aceitam requisições sem validar `Origin`/`Host`, expondo o servidor local (`127.0.0.1:8000`) a CSRF caso o usuário visite um site malicioso com o servidor aberto.
