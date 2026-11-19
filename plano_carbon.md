@@ -76,7 +76,7 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
 
 ### Fase 3 (P1) · Performance de Transcrição, Áudio Comercial e Precisão de Render
 
-- [ ] **3.1. Whisper com Silero VAD (`vad_filter=True`), progresso granular e default inteligente**
+- [x] **3.1. Whisper com Silero VAD (`vad_filter=True`), progresso granular e default inteligente**
   - **Arquivos:** `core/transcriber.py` (`transcribe`, `get_model`), `core/pipeline.py`, `core/config.py` (`WHISPER_MODEL`).
   - **Problema:** Sem `vad_filter=True`, o `faster-whisper` processa silêncios e músicas de fundo, aumentando o tempo de execução e gerando frases alucinadas em legendas. Além disso, o progresso da transcrição fica estagnado em `20%` até o último segmento, e `WHISPER_MODEL="large"` sem GPU torna o primeiro uso extremamente lento.
   - **Solução:**
@@ -85,13 +85,13 @@ Este documento consolida, em ordem de prioridade e dependência técnica, as mel
     - Avaliar/definir `"turbo"` como modelo padrão quando não houver override no `.env` (ou seleção automática CUDA → `"large"` / CPU → `"turbo"`).
   - **Critério de aceite:** Barra de progresso avança suavemente durante a transcrição, silêncios longos são pulados sem alucinações e o tempo de transcrição em CPU cai significativamente.
 
-- [ ] **3.2. Normalização de loudness (`-14 LUFS`) nos cortes exportados**
+- [x] **3.2. Normalização de loudness (`-14 LUFS`) nos cortes exportados**
   - **Arquivos:** `core/options.py` (`audio_normalize: bool = True`), `core/render.py` (`build_music_filter`, `render_clip`), `gui/settings_dialog.py`.
   - **Problema:** Áudios de lives, cortes de podcasts e gravações caseiras chegam com volume baixo ou picos inconsistentes frente a outros Shorts/Reels.
   - **Solução:** Adicionar opção `audio_normalize` em `ProcessingOptions` (ligada por padrão) aplicando filtro `loudnorm=I=-14:TP=-1.5:LRA=11` na trilha de áudio principal (ou na saída final quando houver música de fundo) se o vídeo possuir trilha de áudio.
   - **Critério de aceite:** Clipes exportados saem em volume comercial consistente sem distorção ou clipping, com opção de desativar nos Ajustes.
 
-- [ ] **3.3. FPS real no `sendcmd`, remoção da cópia dupla de fontes e fallback automático de encoder**
+- [x] **3.3. FPS real no `sendcmd`, remoção da cópia dupla de fontes e fallback automático de encoder**
   - **Arquivos:** `core/framing.py` (`probe_size` → `probe_video_info`), `core/render.py` (`dynamic_crop_rects`, `_dynamic_focus_slot`, `build_layout_filter`, `render_clip`), `core/video_ops.py` (`_write_clip_captions`).
   - **Problema:**
     1. `dynamic_crop_rects` usa `fps: float = 30.0` fixo e slots de texto/imagem usam `r=30` / `fps=30`, gerando micro-stutter quando o vídeo de origem é `60fps` ou `24fps`.
