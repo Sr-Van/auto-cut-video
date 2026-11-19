@@ -304,6 +304,11 @@ def _filter_by_score(
     return kept[:eff_max_clips]
 
 
+CHUNK_MAX_DURATION_S = 35 * 60.0
+CHUNK_MAX_CHARS = 45_000
+CHUNK_OVERLAP_S = 120.0
+
+
 def build_transcript_block(segments) -> str:
     lines = []
     for seg in segments:
@@ -311,6 +316,96 @@ def build_transcript_block(segments) -> str:
         end = seconds_to_hhmmss(seg.end)
         lines.append(f"[{start} - {end}] {seg.text}")
     return "\n".join(lines)
+
+
+def split_segments_into_chunks(
+    segments,
+    *,
+    max_duration_s: float = CHUNK_MAX_DURATION_S,
+    max_chars: int = CHUNK_MAX_CHARS,
+    overlap_s: float = CHUNK_OVERLAP_S,
+    pause_gap: float = 1.5,
+) -> list[list]:
+    """Divide transcricoes longas em janelas alinhadas em pausas com overlap."""
+    segs = list(segments or [])
+    if not segs:
+        return []
+    total_dur = float(segs[-1].end) - float(segs[0].start)
+    if total_dur <= max_duration_s and len(build_transcript_block(segs)) <= max_chars:
+        return [segs]
+
+    chunks: list[list] = []
+    n = len(segs)
+    start_idx = 0
+    while start_idx < n:
+        chunk_start = float(segs[start_idx].start)
+        chars = 0
+        end_idx = start_idx
+        while end_idx < n:
+            seg = segs[end_idx]
+            seg_chars = len(getattr(seg, "text", "") or "") + 24
+            dur = float(seg.end) - chunk_start
+            if end_idx > start_idx and (
+                dur > max_duration_s or chars + seg_chars > max_chars
+            ):
+                break
+            chars += seg_chars
+            end_idx += 1
+
+        if end_idx >= n:
+            chunks.append(segs[start_idx:n])
+            break
+
+        # Procura uma pausa natural perto do limite para nao cortar frase no meio.
+        cut_idx = end_idx
+        search_floor = max(start_idx + 1, end_idx - 25)
+        for k in range(end_idx, search_floor, -1):
+            gap = float(segs[k].start) - float(segs[k - 1].end)
+            if gap >= pause_gap:
+                cut_idx = k
+                break
+
+        chunks.append(segs[start_idx:cut_idx])
+
+        # Recua `overlap_s` para nao perder ganchos na fronteira entre janelas.
+        cut_end_t = float(segs[cut_idx - 1].end)
+        next_start = cut_idx
+        while (
+            next_start > start_idx + 1
+            and cut_end_t - float(segs[next_start - 1].start) <= overlap_s
+        ):
+            next_start -= 1
+        start_idx = next_start if next_start > start_idx else cut_idx
+
+    return chunks
+
+
+def _dedupe_chunk_clips(clips: list[dict], max_clips: int) -> list[dict]:
+    """Consolida clipes de varias janelas removendo duplicatas/sobreposicoes."""
+    ordered = sorted(
+        clips, key=lambda c: int(c.get("viral_score", 0)), reverse=True
+    )
+    kept: list[tuple[float, float, dict]] = []
+    for clip in ordered:
+        try:
+            s = hhmmss_to_seconds(clip["start"])
+            e = hhmmss_to_seconds(clip["end"])
+        except (KeyError, ValueError):
+            continue
+        if e <= s:
+            continue
+        dur = e - s
+        duplicate = False
+        for ks, ke, _kclip in kept:
+            overlap = min(e, ke) - max(s, ks)
+            if overlap > 0 and overlap >= 0.5 * min(dur, ke - ks):
+                duplicate = True
+                break
+        if not duplicate:
+            kept.append((s, e, clip))
+            if len(kept) >= max_clips:
+                break
+    return [c for _, _, c in kept]
 
 
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504, 529}
@@ -553,7 +648,12 @@ def analyze(
             "Nenhuma API key configurada. Defina API_KEY, API_KEYS ou API_KEY_1 no .env."
         )
 
-    block = build_transcript_block(segments)
+    eff_max_clips = max_clips if max_clips is not None else MAX_CLIPS
+    pause_gap = float(getattr(options, "pause_gap", 1.5) if options else 1.5)
+    chunks = split_segments_into_chunks(segments, pause_gap=pause_gap)
+    if not chunks:
+        return []
+
     system_prompt = build_rules(
         focus=focus,
         max_clips=max_clips,
@@ -561,6 +661,56 @@ def analyze(
         min_duration=min_clip_duration,
         max_duration=max_clip_duration,
     )
+
+    if len(chunks) == 1:
+        block = build_transcript_block(chunks[0])
+        return _analyze_single_block(
+            block,
+            system_prompt,
+            targets,
+            progress_callback=progress_callback,
+            min_viral_score=min_viral_score,
+            max_clips=max_clips,
+            cancel_event=cancel_event,
+            percent=50,
+        )
+
+    all_clips: list[dict] = []
+    total_chunks = len(chunks)
+    for idx, chunk in enumerate(chunks, start=1):
+        check_cancelled(cancel_event)
+        pct = 50 + int(14 * (idx - 1) / total_chunks)
+        _emit_retry(
+            progress_callback,
+            f"Analisando parte {idx}/{total_chunks} do vídeo...",
+            percent=pct,
+        )
+        block = build_transcript_block(chunk)
+        chunk_clips = _analyze_single_block(
+            block,
+            system_prompt,
+            targets,
+            progress_callback=progress_callback,
+            min_viral_score=min_viral_score,
+            max_clips=max_clips,
+            cancel_event=cancel_event,
+            percent=pct,
+        )
+        all_clips.extend(chunk_clips)
+    return _dedupe_chunk_clips(all_clips, eff_max_clips)
+
+
+def _analyze_single_block(
+    block: str,
+    system_prompt: str,
+    targets: list[KeyTarget],
+    *,
+    progress_callback=None,
+    min_viral_score: int | None = None,
+    max_clips: int | None = None,
+    cancel_event: Event | None = None,
+    percent: int = 50,
+) -> list[dict]:
 
     # Intercala chaves e modelos em rodadas:
     # Rodada 0: (Chave 1, Modelo 1), (Chave 2, Modelo 1), ...
@@ -620,6 +770,7 @@ def analyze(
             _emit_retry(
                 progress_callback,
                 f"Analisando com {target.provider_name} ({model})...",
+                percent=percent,
             )
 
             try:
