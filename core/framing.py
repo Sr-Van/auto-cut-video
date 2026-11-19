@@ -78,6 +78,7 @@ class FocusShot:
 class FramingPlan:
     src_width: int = 0
     src_height: int = 0
+    src_fps: float = 30.0
     shots: list[FocusShot] = field(default_factory=list)
     cam_box: Box | None = None
     content_box: Box | None = None
@@ -98,6 +99,7 @@ class FramingPlan:
         plan = cls(
             src_width=int(data.get("src_width", 0)),
             src_height=int(data.get("src_height", 0)),
+            src_fps=float(data.get("src_fps", 30.0) or 30.0),
             faces_found=int(data.get("faces_found", 0)),
         )
         plan.scene_cuts = [float(t) for t in data.get("scene_cuts", [])]
@@ -121,13 +123,33 @@ class FramingPlan:
 
 
 # --------------------------------------------------------------- leitura
-def probe_size(video_path: str) -> tuple[int, int]:
+def _parse_fps(raw: str) -> float | None:
+    text = (raw or "").strip()
+    if not text or text == "0/0":
+        return None
+    try:
+        if "/" in text:
+            num, den = text.split("/", 1)
+            n, d = float(num), float(den)
+            if d > 0 and n > 0:
+                val = n / d
+                return val if 1.0 <= val <= 240.0 else None
+            return None
+        val = float(text)
+        return val if 1.0 <= val <= 240.0 else None
+    except ValueError:
+        return None
+
+
+def probe_video_info(video_path: str) -> tuple[int, int, float]:
+    """Retorna (largura, altura, fps) do primeiro stream de video."""
     ffprobe = shutil.which("ffprobe")
     if not ffprobe:
-        return 0, 0
+        return 0, 0, 30.0
     cmd = [
         ffprobe, "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "stream=width,height", "-of", "csv=p=0:s=x",
+        "-show_entries", "stream=width,height,avg_frame_rate,r_frame_rate",
+        "-of", "json",
         str(video_path),
     ]
     try:
@@ -139,11 +161,34 @@ def probe_size(video_path: str) -> tuple[int, int]:
             errors="replace",
             timeout=30,
             creationflags=_NO_WINDOW,
-        ).stdout.strip()
-        w, h = out.splitlines()[0].split("x")[:2]
-        return int(w), int(h)
-    except (OSError, ValueError, IndexError, subprocess.SubprocessError):
-        return 0, 0
+        )
+        if out.returncode != 0 or not out.stdout.strip():
+            return 0, 0, 30.0
+        streams = json.loads(out.stdout).get("streams") or []
+        if not streams:
+            return 0, 0, 30.0
+        st = streams[0]
+        w = int(st.get("width") or 0)
+        h = int(st.get("height") or 0)
+        fps = (
+            _parse_fps(str(st.get("avg_frame_rate") or ""))
+            or _parse_fps(str(st.get("r_frame_rate") or ""))
+            or 30.0
+        )
+        return w, h, fps
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        json.JSONDecodeError,
+        subprocess.SubprocessError,
+    ):
+        return 0, 0, 30.0
+
+
+def probe_size(video_path: str) -> tuple[int, int]:
+    w, h, _fps = probe_video_info(video_path)
+    return w, h
 
 
 def read_frames(video_path: str, start: float, end: float, src_w: int, src_h: int):
@@ -745,9 +790,9 @@ def analyze_clip(video_path: str, start: float, end: float, words=None,
         except (OSError, ValueError, KeyError, TypeError):
             pass
 
-    src_w, src_h = probe_size(video_path)
+    src_w, src_h, src_fps = probe_video_info(video_path)
     if not available():
-        return FramingPlan(src_width=src_w, src_height=src_h)
+        return FramingPlan(src_width=src_w, src_height=src_h, src_fps=src_fps)
     frames, _aw, _ah = read_frames(video_path, start, end, src_w, src_h)
     # YuNet e barato: detecta em todo frame. Haar (reserva) a cada 2 amostras.
     every = 1 if has_yunet() else 2
@@ -769,6 +814,7 @@ def analyze_clip(video_path: str, start: float, end: float, words=None,
         tr.motion = orig.motion
     plan = plan_from_tracks(tracks, len(frames), words, src_w, src_h, want_cam, cuts,
                             dynamic=dynamic)
+    plan.src_fps = src_fps
     plan.live_boxes = [(a / SAMPLE_FPS, b / SAMPLE_FPS, box) for a, b, box in lives]
     if plan.live_boxes:
         a0, b0, box0 = plan.live_boxes[0]

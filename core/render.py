@@ -9,6 +9,7 @@ Estrategia de desempenho:
   libx264 se nao houver suporte (driver/GPU).
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -19,6 +20,9 @@ from threading import Event
 from core.captions.fonts import find_font_path
 from core.exceptions import check_cancelled, run_cmd, run_interruptible_cmd
 from core.options import ProcessingOptions
+
+logger = logging.getLogger(__name__)
+LOUDNORM_FILTER = "loudnorm=I=-14:TP=-1.5:LRA=11"
 
 # Ordem de preferencia dos encoders de hardware.
 _HW_ENCODERS = ("h264_nvenc", "h264_qsv", "h264_amf")
@@ -500,8 +504,14 @@ def dynamic_crop_rects(plan, w: int, h: int, src_w: int, src_h: int,
     return cw, ch, rects
 
 
+def _format_fps(fps: float) -> str:
+    val = max(1.0, min(240.0, float(fps or 30.0)))
+    return f"{val:.3f}".rstrip("0").rstrip(".")
+
+
 def _dynamic_focus_slot(src: str, out: str, w: int, h: int, plan,
-                        src_w: int, src_h: int, work_dir: str | None = None) -> str:
+                        src_w: int, src_h: int, work_dir: str | None = None,
+                        fps: float = 30.0) -> str:
     """"Seguir quem fala" com ciclos de zoom + trava na cabeca.
 
     Um unico recorte por quadro (tamanho e posicao enviados por `sendcmd`)
@@ -509,7 +519,7 @@ def _dynamic_focus_slot(src: str, out: str, w: int, h: int, plan,
     acompanha um quadro que muda de tamanho no meio do grafo, entao o zoom e
     feito encolhendo o recorte, nunca ampliando a imagem antes dele.
     """
-    data = dynamic_crop_rects(plan, w, h, src_w, src_h) if work_dir else None
+    data = dynamic_crop_rects(plan, w, h, src_w, src_h, fps=fps) if work_dir else None
     if data is None:
         return _focus_slot(src, out, w, h, plan, src_w, src_h)
     cw, ch, rects = data
@@ -536,9 +546,11 @@ def _dynamic_focus_slot(src: str, out: str, w: int, h: int, plan,
 def build_layout_filter(layout, heights, *, width: int, options, plan=None,
                         src_size=(0, 0), band_lines=(), band_font_size=0,
                         font_file: str = "", image_input: int | None = None,
-                        work_dir: str | None = None) -> str:
+                        work_dir: str | None = None,
+                        src_fps: float = 30.0) -> str:
     """Monta o filter_complex de um layout por slots. Saida: [v]."""
     src_w, src_h = src_size
+    fps_expr = _format_fps(src_fps)
     video_kinds = {"video", "focus", "cam", "content"}
     users = [i for i, s in enumerate(layout.slots) if s.kind in video_kinds]
     parts: list[str] = []
@@ -560,7 +572,8 @@ def build_layout_filter(layout, heights, *, width: int, options, plan=None,
         elif slot.kind == "focus":
             if getattr(slot, "motion", "static") == "dynamic":
                 parts.append(_dynamic_focus_slot(f"src{i}", out, width, h, plan,
-                                                 src_w, src_h, work_dir=work_dir))
+                                                 src_w, src_h, work_dir=work_dir,
+                                                 fps=src_fps))
             else:
                 parts.append(_focus_slot(f"src{i}", out, width, h, plan, src_w, src_h))
         elif slot.kind == "cam":
@@ -582,11 +595,11 @@ def build_layout_filter(layout, heights, *, width: int, options, plan=None,
         elif slot.kind == "image" and image_input is not None:
             parts.append(
                 f"[{image_input}:v]scale={width}:{h}:force_original_aspect_ratio=increase,"
-                f"crop={width}:{h},fps=30,setsar=1,format=yuv420p[{out}]"
+                f"crop={width}:{h},fps={fps_expr},setsar=1,format=yuv420p[{out}]"
             )
         else:  # text (ou imagem ausente): faixa solida com texto
             color = _hex(options.layout_band_color, "#D90A0A")
-            chain = f"color=c={color}:s={width}x{h}:r=30"
+            chain = f"color=c={color}:s={width}x{h}:r={fps_expr}"
             if getattr(options, "layout_band_border", False):
                 bc = _hex(options.layout_text_color, "#FFFFFF")
                 t = max(4, _even(h * 0.03))
@@ -618,16 +631,60 @@ def build_layout_filter(layout, heights, *, width: int, options, plan=None,
     return ";".join(parts)
 
 
-def build_music_filter(music_input: int, volume: float, has_voice: bool) -> str:
+def build_music_filter(
+    music_input: int,
+    volume: float,
+    has_voice: bool,
+    *,
+    normalize: bool = False,
+) -> str:
     """Musica em loop que abaixa sozinha quando ha voz (sidechain). Saida: [a]."""
     music = f"[{music_input}:a]aresample=48000,volume={volume:.3f}"
     if not has_voice:
         return f"{music}[a]"
+    voice_chain = (
+        f"[0:a]aresample=48000,{LOUDNORM_FILTER},asplit=2[voice][key];"
+        if normalize
+        else "[0:a]aresample=48000,asplit=2[voice][key];"
+    )
     return (
-        f"[0:a]aresample=48000,asplit=2[voice][key];{music}[mus];"
+        f"{voice_chain}{music}[mus];"
         "[mus][key]sidechaincompress=threshold=0.02:ratio=10:attack=15:release=350[duck];"
         "[voice][duck]amix=inputs=2:duration=first:normalize=0[a]"
     )
+
+
+def _copy_caption_assets(ass_path: str, options: ProcessingOptions, work: str) -> str:
+    """Copia o .ass e apenas as fontes necessarias para `work` (fontsdir='.')."""
+    abs_ass = os.path.abspath(ass_path)
+    base = os.path.basename(abs_ass)
+    shutil.copy2(abs_ass, os.path.join(work, base))
+
+    font_files: set[str] = set()
+    main_font = find_font_path(options.caption_font, options.caption_bold)
+    if main_font:
+        font_files.add(main_font)
+    if getattr(options, "caption_italic", False):
+        italic_font = find_font_path(
+            options.caption_font, options.caption_bold, True
+        )
+        if italic_font:
+            font_files.add(italic_font)
+
+    ass_dir = os.path.dirname(abs_ass)
+    for item in os.listdir(ass_dir):
+        if item.lower().endswith((".ttf", ".otf")):
+            font_files.add(os.path.join(ass_dir, item))
+
+    for src in font_files:
+        if os.path.isfile(src):
+            dest = os.path.join(work, os.path.basename(src))
+            if not os.path.exists(dest):
+                try:
+                    shutil.copy2(src, dest)
+                except OSError:
+                    pass
+    return base
 
 
 def render_clip(
@@ -641,6 +698,7 @@ def render_clip(
     cancel_event: Event | None = None,
     plan=None,
     band_text: str = "",
+    warn_callback=None,
 ) -> str:
     """Corta [start_s, end_s] no formato escolhido, com legenda e musica opcionais."""
     check_cancelled(cancel_event)
@@ -696,58 +754,89 @@ def render_clip(
                             with open(os.path.join(work, f"band_{i}_{n}.txt"), "w",
                                       encoding="utf-8") as fh:
                                 fh.write(line)
-            src_size = (
-                (plan.src_width, plan.src_height)
-                if plan is not None and plan.src_width
-                else _probe_size(video_path)
-            )
+            if plan is not None and plan.src_width:
+                src_size = (plan.src_width, plan.src_height)
+                src_fps = float(getattr(plan, "src_fps", 0.0) or 30.0)
+            else:
+                pw, ph, src_fps = _probe_video_info(video_path)
+                src_size = (pw, ph)
             filters = build_layout_filter(
                 layout, heights, width=options.width, options=options, plan=plan,
                 src_size=src_size, band_lines=lines, band_font_size=size,
                 font_file=font_name, image_input=image_input, work_dir=work,
+                src_fps=src_fps,
             )
 
         vlabel = "[v]"
         if ass_path:
-            for item in os.listdir(os.path.dirname(os.path.abspath(ass_path))):
-                src = os.path.join(os.path.dirname(os.path.abspath(ass_path)), item)
-                if os.path.isfile(src):
-                    shutil.copy2(src, os.path.join(work, item))
-            base = os.path.basename(ass_path)
+            base = _copy_caption_assets(ass_path, options, work)
             filters += f";[v]subtitles=filename='{base}':fontsdir='.'[vout]"
             vlabel = "[vout]"
 
+        has_audio = _probe_has_audio(video_path)
+        normalize_audio = bool(getattr(options, "audio_normalize", True))
         audio_map = ["-map", "0:a?"]
         music = options.aux_audio_path
         if music and os.path.isfile(music) and options.aux_audio_volume > 0:
             inputs += ["-stream_loop", "-1", "-i", os.path.abspath(music)]
             filters += ";" + build_music_filter(
-                next_input, options.aux_audio_volume, _probe_has_audio(video_path)
+                next_input,
+                options.aux_audio_volume,
+                has_audio,
+                normalize=normalize_audio,
             )
             audio_map = ["-map", "[a]"]
             next_input += 1
+        elif has_audio and normalize_audio:
+            filters += f";[0:a]{LOUDNORM_FILTER}[a]"
+            audio_map = ["-map", "[a]"]
 
-        cmd = [
-            ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
-            *inputs,
-            "-t", f"{duration:.3f}",
-            "-filter_complex", filters,
-            "-map", vlabel,
-            *audio_map,
-            *encoder_args(encoder, options.crf, options.preset),
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(out_path),
-        ]
+        def _build_cmd(enc: str) -> list[str]:
+            return [
+                ffmpeg, "-y", "-hide_banner", "-loglevel", "error",
+                *inputs,
+                "-t", f"{duration:.3f}",
+                "-filter_complex", filters,
+                "-map", vlabel,
+                *audio_map,
+                *encoder_args(enc, options.crf, options.preset),
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                str(out_path),
+            ]
 
         result = run_interruptible_cmd(
-            cmd, cancel_event=cancel_event, cwd=work, cleanup_path=out_path,
+            _build_cmd(encoder),
+            cancel_event=cancel_event,
+            cwd=work,
+            cleanup_path=out_path,
         )
+        if result.returncode != 0 and not options.encoder and encoder != "libx264":
+            check_cancelled(cancel_event)
+            msg = (
+                f"Aviso: encoder '{encoder}' falhou ao renderizar; "
+                "repetindo com libx264."
+            )
+            logger.warning("%s (%s)", msg, (result.stderr or "").strip()[:200])
+            if warn_callback is not None:
+                warn_callback(msg)
+            result = run_interruptible_cmd(
+                _build_cmd("libx264"),
+                cancel_event=cancel_event,
+                cwd=work,
+                cleanup_path=out_path,
+            )
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao renderizar clip vertical: {result.stderr}")
     return str(out_path)
+
+
+def _probe_video_info(video_path: str) -> tuple[int, int, float]:
+    from core.framing import probe_video_info
+
+    return probe_video_info(video_path)
 
 
 def _probe_size(video_path: str) -> tuple[int, int]:

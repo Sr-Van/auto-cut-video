@@ -103,7 +103,7 @@ class TestPhase2Cuts(unittest.TestCase):
             cache_file.write_text(json.dumps(stale_payload), encoding="utf-8")
 
             with (
-                patch("core.framing.probe_size", return_value=(1920, 1080)),
+                patch("core.framing.probe_video_info", return_value=(1920, 1080, 30.0)),
                 patch("core.framing.read_frames", return_value=([], 320, 180)),
             ):
                 plan = framing.analyze_clip(

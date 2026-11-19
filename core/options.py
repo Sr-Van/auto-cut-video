@@ -29,6 +29,7 @@ class ProcessingOptions:
     preset: str = cfg.VERTICAL_PRESET
     max_workers: int = cfg.VERTICAL_MAX_WORKERS
     padding_s: float = float(cfg.PADDING_S)
+    audio_normalize: bool = True
 
     # --- Legendas dinamicas ---
     captions_enabled: bool = False
@@ -182,6 +183,7 @@ class ProcessingOptions:
         self.aux_image_path = str(self.aux_image_path or "").strip()
         self.aux_audio_path = str(self.aux_audio_path or "").strip()
         self.aux_audio_volume = max(0.0, min(1.0, float(self.aux_audio_volume or 0.0)))
+        self.audio_normalize = bool(self.audio_normalize)
         return self
 
     @classmethod

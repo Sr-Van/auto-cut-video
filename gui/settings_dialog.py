@@ -327,6 +327,9 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(grid2)
 
+        self.audio_normalize = Switch("Normalizar volume (-14 LUFS)")
+        layout.addWidget(self.audio_normalize)
+
         note = label(
             "O modo 'auto' utiliza aceleração por placa de vídeo (NVENC/QSV/AMF) quando disponível "
             "e recorre ao libx264 como fallback. Valores menores de CRF produzem maior qualidade visual.",
@@ -1049,6 +1052,7 @@ class SettingsDialog(QDialog):
             color_btn.changed.connect(self._refresh_preview)
         self.captions_enabled_toggle.toggled.connect(self._refresh_preview)
         self.caption_uppercase.toggled.connect(self._refresh_preview)
+        self.audio_normalize.toggled.connect(self._refresh_preview)
         self.caption_glow.toggled.connect(self._refresh_preview)
         self.caption_italic.toggled.connect(self._refresh_preview)
         self.caption_emphasis.toggled.connect(self._refresh_preview)
@@ -1221,6 +1225,9 @@ class SettingsDialog(QDialog):
             self.crf.setValue(options.crf)
             self.preset.setCurrentText(options.preset)
             self.encoder.setCurrentText(options.encoder or "auto")
+            self.audio_normalize.setChecked(
+                bool(getattr(options, "audio_normalize", True))
+            )
             for index in range(self.resolution.count()):
                 width, height = self.resolution.itemData(index)
                 if (width, height) == (options.width, options.height):
@@ -1258,7 +1265,7 @@ class SettingsDialog(QDialog):
             self.max_workers.setValue(options.max_workers)
 
             self.ai_model.set_value(options.ai_model)
-            w_model = (options.whisper_model or "large").strip()
+            w_model = (options.whisper_model or "turbo").strip()
             w_found = False
             for idx in range(self.whisper_model.count()):
                 if self.whisper_model.itemData(idx) == w_model:
@@ -1288,6 +1295,7 @@ class SettingsDialog(QDialog):
             if self.encoder.currentText() == "auto"
             else self.encoder.currentText()
         )
+        options.audio_normalize = self.audio_normalize.isChecked()
         res_data = self.resolution.currentData()
         if res_data:
             options.width, options.height = res_data
