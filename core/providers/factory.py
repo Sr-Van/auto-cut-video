@@ -115,6 +115,32 @@ def list_available_models(
     return result
 
 
+_LIVE_MODELS_CACHE: dict[tuple[str, str], tuple[str, ...]] = {}
+
+
+def reset_live_models_cache() -> None:
+    _LIVE_MODELS_CACHE.clear()
+
+
+def _cached_live_models(
+    provider_obj: BaseAIProvider,
+    api_key: str,
+    base_url: str,
+    client: httpx.Client | None = None,
+) -> tuple[str, ...]:
+    http_client = client
+    if http_client is not None and isinstance(
+        getattr(http_client, "_transport", None), httpx.MockTransport
+    ):
+        return ()
+    cache_key = (provider_obj.provider_id, base_url.rstrip("/"))
+    if cache_key not in _LIVE_MODELS_CACHE:
+        _LIVE_MODELS_CACHE[cache_key] = provider_obj.fetch_models(
+            api_key, base_url, client=http_client
+        )
+    return _LIVE_MODELS_CACHE[cache_key]
+
+
 def resolve_targets(
     raw_keys: list[str],
     options: ProcessingOptions | None = None,
@@ -159,6 +185,13 @@ def resolve_targets(
                 custom_models=None if provider_id == "openrouter" else fallback,
                 client=client,
             )
+            if provider_id != "openrouter":
+                live_models = _cached_live_models(
+                    provider_obj, clean_key, base_url, client=client
+                )
+                if live_models:
+                    live_set = set(live_models)
+                    models = tuple(m for m in models if m in live_set) or models
 
         preferred = _preferred_model(options, provider_obj.provider_id)
         if preferred:
