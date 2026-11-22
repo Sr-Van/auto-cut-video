@@ -12,6 +12,9 @@ CSV_FIELDNAMES = [
     "file",
     "start",
     "end",
+    "cut_start",
+    "cut_end",
+    "cut_duration_s",
     "hook",
     "category",
     "viral_score",
@@ -219,3 +222,19 @@ def delete_project(
 
     save_projects_registry(remaining, registry_path)
     return True
+
+
+def project_folder_missing(project: dict) -> bool:
+    """True quando a pasta registrada do projeto nao existe mais no disco."""
+    project_dir = str(project.get("project_dir") or "")
+    return not project_dir or not Path(project_dir).is_dir()
+
+
+def remove_missing_projects(registry_path: str | Path | None = None) -> int:
+    """Remove do registro (sem apagar nada no disco) projetos cuja pasta sumiu."""
+    existing = load_projects_registry(registry_path)
+    remaining = [p for p in existing if not project_folder_missing(p)]
+    removed = len(existing) - len(remaining)
+    if removed:
+        save_projects_registry(remaining, registry_path)
+    return removed

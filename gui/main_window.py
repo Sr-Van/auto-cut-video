@@ -1,13 +1,14 @@
+import copy
+import re
+import shutil
+import time
 from pathlib import Path
 
-import shutil
-
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QButtonGroup,
-    QComboBox,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -31,26 +32,25 @@ from core.captions.presets import (
     apply_preset,
     detect_active_preset,
 )
-from core.options import ProcessingOptions
-from gui.controllers.pipeline_controller import PipelineController
-from gui.projects_dialog import (
-    ProjectsDialog,
-    format_clip_interval,
-    open_upload_pages,
-    update_published_button_ui,
-)
 from core.layouts import LAYOUTS, get_layout, missing_requirements
+from core.options import ProcessingOptions
 from gui import theme
+from gui.clip_card import ClipCard
+from gui.controllers.pipeline_controller import PipelineController
+from gui.projects_dialog import ProjectsDialog
+from gui.settings_dialog import SettingsDialog
 from gui.thumbnails import FrameLoader, poster_pixmap
-from gui.settings_dialog import RESOLUTIONS, SettingsDialog
 from gui.widgets import (
+    CollapsibleBox,
+    CompactPresetCard,
     ElidedLabel,
-    flash_button,
-    Panel,
+    FlowGrid,
+    FormatOption,
     PhonePreviewWidget,
-    PipeStep,
     Segmented,
+    StepRow,
     Switch,
+    Toast,
     label,
     separator,
 )
@@ -58,63 +58,121 @@ from utils.report import load_report, update_clip_published
 
 LOG_MAX_LINES = 500
 
+PAGE_CONFIG, PAGE_RUN, PAGE_RESULTS = 0, 1, 2
+
+# (titulo, dica, etapas do pipeline que pertencem a esta linha)
 PIPE_STEPS = [
-    ("Entrada", "download / áudio", {"baixando", "audio", "iniciando", "upload"}),
-    ("Transcrição", "Whisper", {"transcricao"}),
-    ("Análise", "IA", {"analise", "normalizacao"}),
-    ("Corte", "9:16 + legendas", {"corte", "clipes"}),
-    ("Relatório", "JSON + CSV", {"relatorio"}),
+    ("Preparando o vídeo", "download e extração do áudio", {"baixando", "audio", "iniciando", "upload"}),
+    ("Transcrevendo", "transformando a fala em texto", {"transcricao"}),
+    ("Analisando com IA", "escolhendo os melhores momentos", {"analise", "normalizacao", "revisao"}),
+    ("Renderizando cortes", "vídeo vertical 9:16", {"corte", "clipes"}),
+    ("Relatório", "títulos e descrições", {"relatorio"}),
 ]
 
 STAGE_LABELS = {
     "pronto": "Pronto",
     "iniciando": "Iniciando",
+    "upload": "Preparando o vídeo",
     "baixando": "Baixando vídeo",
     "audio": "Extraindo áudio",
     "transcricao": "Transcrevendo",
     "analise": "Analisando com IA",
     "normalizacao": "Ajustando duração",
+    "revisao": "Aguardando sua revisão",
     "corte": "Cortando clipes",
-    "clipes": "Renderizando clipes",
+    "clipes": "Renderizando cortes",
     "relatorio": "Gerando relatório",
     "concluido": "Concluído",
 }
 
-TRANSCRIBE_LABELS = {"clip": "Por clipe", "full": "Completa"}
+# Escolhas em linguagem simples da tela Cortar -> valores tecnicos.
+DURATION_CHOICES = [("Curto", 15, 40), ("Médio", 40, 90), ("Longo", 90, 120)]
+RIGOR_CHOICES = [("Mais cortes", 6), ("Equilibrado", 8), ("Só os melhores", 9)]
 
+VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+VIDEO_FILTER = "Vídeos (*.mp4 *.mkv *.mov *.avi *.webm *.m4v)"
+
+QUICK_PRESETS_SHOWN = 4
+PREVIEW_COL_WIDTH = 220
 
 _ERROR_HINTS = (
-    ("api key", "Verifique as chaves de IA no arquivo .env (API_KEY ou API_KEY_1...)."),
+    ("api key", "Verifique as chaves de IA em Ajustes → Contas e IA."),
     ("ffmpeg", "Confira se o FFmpeg está instalado e no PATH."),
-    ("informe yt_link", "Cole um link ou selecione um arquivo antes de processar."),
+    ("informe yt_link", "Cole um link ou escolha um arquivo antes de gerar os cortes."),
     ("falha ao baixar", "Não foi possível baixar o vídeo. Confira o link e a conexão."),
     ("quota", "A cota gratuita do provedor de IA acabou. Tente outra chave ou mais tarde."),
     ("429", "O provedor de IA limitou as requisições. Aguarde um pouco e tente de novo."),
-    ("cuda", "Falha na GPU ao transcrever. Tente o modelo Whisper 'small' ou compute type int8."),
+    ("cuda", "Falha na GPU ao transcrever. Tente o modelo Whisper 'small' em Ajustes → Avançado."),
+    (
+        "expecting value",
+        "A IA respondeu em um formato inesperado. Tente de novo ou escolha outro "
+        "modelo em Ajustes → Contas e IA.",
+    ),
+    (
+        "json",
+        "A IA respondeu em um formato inesperado. Tente de novo ou escolha outro "
+        "modelo em Ajustes → Contas e IA.",
+    ),
 )
 
 
 def friendly_error(error: str) -> str:
-    """Prefixa a mensagem tecnica com uma orientacao em linguagem simples."""
+    """Orientacao em linguagem simples seguida do detalhe tecnico."""
     text = str(error or "Erro desconhecido.")
     low = text.lower()
     for needle, hint in _ERROR_HINTS:
         if needle in low:
             return f"{hint}\n\nDetalhe técnico:\n{text}"
-    return text
+    return (
+        "Algo deu errado durante o processamento. Tente de novo; se repetir, "
+        f"veja o log abaixo.\n\nDetalhe técnico:\n{text}"
+    )
+
+
+def link_state(text: str) -> str:
+    """'empty', 'ok' ou 'invalid' para o texto do campo de link."""
+    t = (text or "").strip()
+    if not t:
+        return "empty"
+    if re.match(r"^https?://[^\s/]+\.[^\s]+", t, re.I):
+        return "ok"
+    if re.match(r"^(www\.|m\.)?(youtube\.com|youtu\.be)/\S+", t, re.I):
+        return "ok"
+    return "invalid"
+
+
+def normalize_link(text: str) -> str:
+    t = (text or "").strip()
+    if t and not re.match(r"^https?://", t, re.I):
+        t = "https://" + t
+    return t
+
+
+def _fmt_secs(secs: float) -> str:
+    secs = max(0, int(secs))
+    return f"{secs // 60}:{secs % 60:02d}"
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("AutoCortesBR")
-        self.resize(1260, 840)
+        self.resize(1280, 840)
         self.setMinimumSize(980, 660)
         self.video_path = None
         self.worker = None
         self.clip_paths: list[str] = []
         self.report_path: str | None = None
+        self.last_clips: list[dict] = []
         self._syncing_quick = False
+        self._run_started = 0.0
+        self._step_started: dict[int, float] = {}
+        self._active_step = -1
+        self._stage_text = ""
 
         self.frames = FrameLoader(self)
         self.frames.loaded.connect(self._on_frame_loaded)
@@ -129,6 +187,7 @@ class MainWindow(QMainWindow):
         self.controller.finished.connect(self.on_finished)
         self.controller.failed.connect(self.on_failed)
         self.controller.cancelled.connect(self.on_cancelled)
+        self.controller.review_requested.connect(self._on_review_requested)
 
         root = QWidget()
         root.setObjectName("Root")
@@ -144,19 +203,17 @@ class MainWindow(QMainWindow):
 
         # --- Pilha principal de navegação (Cortar | Projetos | Ajustes)
         self.main_stack = QStackedWidget()
+        self.log_box = self._build_log_box()
         self.workspace_view = self._build_workspace_view()
         self.projects_view = ProjectsDialog(self, embedded=True)
-        self.projects_view.project_deleted.connect(
-            self._on_project_deleted_in_dialog
-        )
+        self.projects_view.project_deleted.connect(self._on_project_deleted_in_dialog)
         self.projects_view.clip_published_changed.connect(
             self._on_clip_published_changed_in_dialog
         )
 
         self.settings_view = SettingsDialog(self.options, self, embedded=True)
-        self.settings_view.options_changed.connect(
-            self._on_embedded_settings_changed
-        )
+        self.settings_view.api_keys_changed.connect(self._refresh_env_status)
+        self.settings_view.options_changed.connect(self._on_embedded_settings_changed)
 
         self.main_stack.addWidget(self.workspace_view)  # 0
         self.main_stack.addWidget(self.projects_view)   # 1
@@ -164,13 +221,18 @@ class MainWindow(QMainWindow):
         root_layout.addWidget(self.main_stack, 1)
 
         self.setCentralWidget(root)
+        self.toast = Toast(root)
+
+        self._clock = QTimer(self)
+        self._clock.setInterval(1000)
+        self._clock.timeout.connect(self._tick)
+
         self._refresh_summary()
         self.setAcceptDrops(True)
         self._install_shortcuts()
         self._refresh_env_status()
         self._update_process_enabled()
-        self.report_button.setEnabled(False)
-        self.open_folder_button.setEnabled(False)
+        self._show_page(PAGE_CONFIG)
 
     # ------------------------------------------------------------------
     # Barra superior com navegação integrada
@@ -192,11 +254,8 @@ class MainWindow(QMainWindow):
         brand = QLabel("AutoCortes")
         brand.setObjectName("Brand")
         layout.addWidget(brand)
-        layout.addWidget(label("BR", "BrandTag"))
-
         layout.addSpacing(18)
 
-        # Navegação integrada por abas (Cortar | Projetos | Ajustes)
         nav_bar = QFrame()
         nav_bar.setObjectName("NavBar")
         nav_layout = QHBoxLayout(nav_bar)
@@ -207,36 +266,35 @@ class MainWindow(QMainWindow):
         self.nav_group.setExclusive(True)
 
         self.workspace_button = QPushButton("Cortar")
-        self.workspace_button.setObjectName("NavTab")
-        self.workspace_button.setCheckable(True)
-        self.workspace_button.setChecked(True)
-        self.workspace_button.setCursor(Qt.PointingHandCursor)
-
         self.projects_button = QPushButton("Projetos")
-        self.projects_button.setObjectName("NavTab")
-        self.projects_button.setCheckable(True)
-        self.projects_button.setCursor(Qt.PointingHandCursor)
-
         self.settings_button = QPushButton("Ajustes")
-        self.settings_button.setObjectName("NavTab")
-        self.settings_button.setCheckable(True)
-        self.settings_button.setCursor(Qt.PointingHandCursor)
-
-        for idx, btn in (
-            (0, self.workspace_button),
-            (1, self.projects_button),
-            (2, self.settings_button),
+        for idx, (btn, key) in enumerate(
+            (
+                (self.workspace_button, "Ctrl+1"),
+                (self.projects_button, "Ctrl+2"),
+                (self.settings_button, "Ctrl+3"),
+            )
         ):
+            btn.setObjectName("NavTab")
+            btn.setCheckable(True)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(key)
             self.nav_group.addButton(btn, idx)
             nav_layout.addWidget(btn)
+        self.workspace_button.setChecked(True)
 
         self.nav_group.idToggled.connect(self._on_nav_changed)
         layout.addWidget(nav_bar)
-
         layout.addStretch(1)
 
-        self.header_status_pill = label("Pronto", "StatusPill")
+        self.header_status_pill = QPushButton("Pronto")
+        self.header_status_pill.setObjectName("StatusPill")
         self.header_status_pill.setProperty("state", "idle")
+        self.header_status_pill.setCursor(Qt.PointingHandCursor)
+        self.header_status_pill.setToolTip("Ir para a tela Cortar")
+        self.header_status_pill.clicked.connect(
+            lambda: self.workspace_button.setChecked(True)
+        )
         layout.addWidget(self.header_status_pill)
         return header
 
@@ -256,380 +314,462 @@ class MainWindow(QMainWindow):
         self.header_status_pill.style().polish(self.header_status_pill)
 
     # ------------------------------------------------------------------
-    # Visão 0: Workspace Principal ("Cortar")
+    # Visão 0: Cortar (configurar -> processando -> resultados)
     # ------------------------------------------------------------------
     def _build_workspace_view(self) -> QWidget:
+        self.workspace_stack = QStackedWidget()
+        config = QWidget()
+        config.setObjectName("Root")
+        cl = QVBoxLayout(config)
+        cl.setContentsMargins(0, 0, 0, 0)
+        cl.setSpacing(0)
+        cl.addWidget(self._centered_scroll(self._build_config_page(), 1120), 1)
+        cl.addWidget(self._build_config_footer())
+        self.workspace_stack.addWidget(config)
+        self.workspace_stack.addWidget(self._centered_scroll(self._build_run_page(), 960))
+        self.workspace_stack.addWidget(self._build_results_page())
+        return self.workspace_stack
+
+    @staticmethod
+    def _centered_scroll(content: QWidget, max_width: int) -> QScrollArea:
+        holder = QWidget()
+        holder.setObjectName("Root")
+        row = QHBoxLayout(holder)
+        row.setContentsMargins(24, 18, 24, 24)
+        row.setSpacing(0)
+        row.addStretch(1)
+        content.setMaximumWidth(max_width)
+        row.addWidget(content, 100)
+        row.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(holder)
+        return scroll
+
+    def _show_page(self, page: int):
+        """Troca o estado da tela Cortar; o log acompanha a pagina visivel."""
+        slot = {PAGE_RUN: self.run_log_slot, PAGE_RESULTS: self.results_log_slot}.get(page)
+        if slot is not None and self.log_box.parentWidget() is not None:
+            slot.addWidget(self.log_box)
+        self.workspace_stack.setCurrentIndex(page)
+
+    # --- Passos da configuração ---------------------------------------
+    def _step(self, number: int, title: str, hint: str = ""):
+        frame = QFrame()
+        frame.setObjectName("StepSection")
+        col = QVBoxLayout(frame)
+        col.setContentsMargins(0, 0, 0, 16)
+        col.setSpacing(10)
+        head = QHBoxLayout()
+        head.setSpacing(10)
+        badge = label(str(number), "StepNum")
+        badge.setAlignment(Qt.AlignCenter)
+        badge.setFixedSize(24, 24)
+        badge.setProperty("state", "idle")
+        head.addWidget(badge)
+        head.addWidget(label(title, "StepTitleBig"))
+        if hint:
+            head.addWidget(label(hint, "Faint"))
+        head.addStretch(1)
+        col.addLayout(head)
+        return frame, col, head, badge
+
+    @staticmethod
+    def _set_badge(badge: QLabel, number: int, state: str):
+        badge.setText("✓" if state == "done" else str(number))
+        badge.setProperty("state", state)
+        badge.style().unpolish(badge)
+        badge.style().polish(badge)
+
+    def _build_config_page(self) -> QWidget:
         page = QWidget()
         page.setObjectName("Root")
-        grid = QGridLayout(page)
-        grid.setContentsMargins(18, 16, 18, 16)
-        grid.setHorizontalSpacing(16)
-        grid.setVerticalSpacing(14)
-        grid.setColumnStretch(0, 19)
-        grid.setColumnStretch(1, 31)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(12)
 
-        # Coluna Esquerda: Entrada + Ajustes Rápidos/Prévia + Botão Processar
-        # Entrada + configuracao rolam juntas; o botao Processar fica sempre visivel.
-        left_scroll_body = QWidget()
-        left_scroll_body.setObjectName("Root")
-        left_inner = QVBoxLayout(left_scroll_body)
-        left_inner.setContentsMargins(0, 0, 6, 0)
-        left_inner.setSpacing(12)
-        left_inner.addWidget(self._build_source_panel())
-        left_inner.addWidget(self._build_quick_config_panel(), 1)
-
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QScrollArea.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        left_scroll.setWidget(left_scroll_body)
-        # Sem rolagem horizontal: a coluna nunca fica mais estreita que o conteudo.
-        left_scroll.setMinimumWidth(
-            left_scroll_body.minimumSizeHint().width()
-            + left_scroll.verticalScrollBar().sizeHint().width()
+        title_row = QHBoxLayout()
+        title_row.setSpacing(14)
+        title_row.addWidget(label("Novo corte", "PageTitle"))
+        title_row.addWidget(
+            label("Escolha o vídeo e o formato, decida se quer legendas e gere os cortes", "Muted")
         )
+        title_row.addStretch(1)
+        outer.addLayout(title_row)
 
-        left_col = QVBoxLayout()
-        left_col.setSpacing(12)
-        left_col.addWidget(left_scroll, 1)
-        left_col.addLayout(self._build_action_bar())
+        self.config_banner = label("", "InfoBanner", wrap=True)
+        self.config_banner.setVisible(False)
+        outer.addWidget(self.config_banner)
 
-        # Coluna Direita: Progresso/Etapas + Painel de Cortes/Log
-        right_col = QVBoxLayout()
-        right_col.setSpacing(12)
-        right_col.addWidget(self._build_progress_panel())
-        right_col.addWidget(self._build_output_panel(), 1)
-
-        grid.addLayout(left_col, 0, 0)
-        grid.addLayout(right_col, 0, 1)
+        grid = QHBoxLayout()
+        grid.setSpacing(32)
+        steps = QVBoxLayout()
+        steps.setSpacing(0)
+        steps.addWidget(self._build_source_step())
+        steps.addWidget(separator())
+        steps.addSpacing(14)
+        steps.addWidget(self._build_format_step())
+        steps.addWidget(separator())
+        steps.addSpacing(14)
+        steps.addWidget(self._build_caption_step())
+        steps.addWidget(separator())
+        steps.addSpacing(14)
+        steps.addWidget(self._build_cuts_step())
+        steps.addStretch(1)
+        grid.addLayout(steps, 1)
+        preview_holder = QWidget()
+        preview_holder.setFixedWidth(PREVIEW_COL_WIDTH)
+        preview_holder.setLayout(self._build_preview_column())
+        grid.addWidget(preview_holder, 0, Qt.AlignTop)
+        outer.addLayout(grid, 1)
         return page
 
-    def _build_source_panel(self) -> QWidget:
-        panel = Panel("Vídeo de origem e destino", "Entrada", compact=True)
+    def _build_config_footer(self) -> QWidget:
+        """Barra fixa com o botao principal: sempre visivel, sem rolar."""
+        footer = QFrame()
+        footer.setObjectName("ActionFooter")
+        row = QHBoxLayout(footer)
+        row.setContentsMargins(24, 12, 24, 12)
+        row.addStretch(1)
+        inner = QWidget()
+        inner.setMaximumWidth(1120)
+        il = QHBoxLayout(inner)
+        il.setContentsMargins(0, 0, 0, 0)
+        il.setSpacing(32)
+        il.addLayout(self._build_action_bar(), 1)
+        il.addSpacing(PREVIEW_COL_WIDTH)
+        row.addWidget(inner, 100)
+        row.addStretch(1)
+        return footer
 
-        self.source_tabs = Segmented(["Link", "Arquivo"])
-        self.source_tabs.changed.connect(self._on_source_changed)
-        panel.add_head_widget(self.source_tabs)
+    def _build_source_step(self) -> QWidget:
+        frame, col, _head, self.source_badge = self._step(1, "Vídeo", "link ou arquivo · um por vez")
 
-        self.source_stack = QStackedWidget()
-
-        # --- Aba Link
-        link_page = QWidget()
-        link_layout = QVBoxLayout(link_page)
-        link_layout.setContentsMargins(0, 0, 0, 0)
-        link_layout.setSpacing(5)
-        link_layout.addWidget(label("URL do vídeo (YouTube, etc.)", "FieldLabel"))
+        self.source_drop = QFrame()
+        self.source_drop.setObjectName("SourceDrop")
+        self.source_drop.setProperty("drag", "false")
+        drop = QVBoxLayout(self.source_drop)
+        drop.setContentsMargins(14, 14, 14, 12)
+        drop.setSpacing(8)
+        row = QHBoxLayout()
+        row.setSpacing(8)
         self.video_link = QLineEdit()
-        self.video_link.setPlaceholderText("https://www.youtube.com/watch?v=...")
+        self.video_link.setPlaceholderText(
+            "Cole aqui o link do YouTube — ou arraste um arquivo de vídeo para a janela"
+        )
         self.video_link.setClearButtonEnabled(True)
         self.video_link.textChanged.connect(self._on_link_edited)
-        link_layout.addWidget(self.video_link)
-        self.source_stack.addWidget(link_page)
-
-        # --- Aba Arquivo
-        file_page = QWidget()
-        file_layout = QVBoxLayout(file_page)
-        file_layout.setContentsMargins(0, 0, 0, 0)
-        file_layout.setSpacing(6)
-
-        self.select_button = QPushButton(
-            "Selecionar arquivo de vídeo local (MP4, MKV, MOV, AVI)"
-        )
-        self.select_button.setObjectName("Dropzone")
+        self.video_link.returnPressed.connect(self._run_process_shortcut)
+        row.addWidget(self.video_link, 1)
+        self.select_button = QPushButton("Procurar arquivo")
+        self.select_button.setObjectName("Ghost")
         self.select_button.setCursor(Qt.PointingHandCursor)
-        self.select_button.clicked.connect(self.select_video)
-        self.select_button.setText(
-            "Arraste um vídeo aqui ou clique para selecionar (MP4, MKV, MOV, AVI)"
-        )
         self.select_button.setToolTip("Ctrl+O")
-        file_layout.addWidget(self.select_button)
+        self.select_button.clicked.connect(self.select_video)
+        row.addWidget(self.select_button)
+        drop.addLayout(row)
+        self.source_hint = label(
+            "Links do YouTube ou arquivos MP4, MKV, MOV, AVI, WEBM, M4V  ·  "
+            "Ctrl+O procura um arquivo  ·  Enter gera os cortes",
+            "SourceHint",
+            wrap=True,
+        )
+        self.source_hint.setProperty("state", "idle")
+        drop.addWidget(self.source_hint)
+        col.addWidget(self.source_drop)
 
         self.file_selected_card = QFrame()
         self.file_selected_card.setObjectName("FileSelected")
         sel_row = QHBoxLayout(self.file_selected_card)
-        sel_row.setContentsMargins(10, 8, 10, 8)
-        sel_row.setSpacing(8)
-
+        sel_row.setContentsMargins(12, 10, 12, 10)
+        sel_row.setSpacing(12)
         self.file_badge = QLabel("MP4")
         self.file_badge.setObjectName("FileSelectedBadge")
         self.file_badge.setAlignment(Qt.AlignCenter)
-        self.file_badge.setFixedSize(38, 26)
+        self.file_badge.setFixedSize(42, 34)
         sel_row.addWidget(self.file_badge)
-
         info_col = QVBoxLayout()
-        info_col.setSpacing(1)
-        self.path_label = ElidedLabel("Nenhum vídeo selecionado", "FieldLabel")
+        info_col.setSpacing(2)
+        self.path_label = ElidedLabel("Nenhum vídeo selecionado", "FileName")
         self.file_size_label = ElidedLabel("—", "Faint")
         info_col.addWidget(self.path_label)
         info_col.addWidget(self.file_size_label)
         sel_row.addLayout(info_col, 1)
-
         self.change_file_button = QPushButton("Trocar")
         self.change_file_button.setObjectName("Ghost")
         self.change_file_button.setCursor(Qt.PointingHandCursor)
         self.change_file_button.clicked.connect(self.select_video)
         sel_row.addWidget(self.change_file_button)
-
         self.clear_file_button = QPushButton("✕")
         self.clear_file_button.setObjectName("IconBtn")
         self.clear_file_button.setCursor(Qt.PointingHandCursor)
-        self.clear_file_button.setToolTip("Remover arquivo")
+        self.clear_file_button.setToolTip("Remover arquivo e usar um link")
         self.clear_file_button.clicked.connect(self.clear_video)
         sel_row.addWidget(self.clear_file_button)
-
         self.file_selected_card.setVisible(False)
-        file_layout.addWidget(self.file_selected_card)
-        self.source_stack.addWidget(file_page)
+        col.addWidget(self.file_selected_card)
 
-        panel.body.addWidget(self.source_stack)
-
-        self.env_status_label = label("", "FieldHint", wrap=True)
-        self.env_status_label.setTextFormat(Qt.RichText)
-        panel.body.addWidget(self.env_status_label)
-
-        # --- Foco da análise
-        focus_box = QVBoxLayout()
-        focus_box.setSpacing(4)
-        focus_head = QHBoxLayout()
-        focus_head.addWidget(label("Direcionamento da IA (opcional)", "FieldLabel"))
-        focus_head.addStretch(1)
-        focus_box.addLayout(focus_head)
-
-        self.focus_input = QPlainTextEdit()
-        self.focus_input.setPlaceholderText(
-            "Ex.: Focar em partes engraçadas · Priorizar polêmicas · Extrair dicas práticas diretas"
-        )
-        self.focus_input.setPlainText(self.options.focus_instruction)
-        self.focus_input.setFixedHeight(64)
-        self.focus_input.setTabChangesFocus(True)
-        self.focus_input.textChanged.connect(self._on_focus_edited)
-        focus_box.addWidget(self.focus_input)
-        panel.body.addLayout(focus_box)
-
-        # --- Pasta de saída
-        out_box = QVBoxLayout()
-        out_box.setSpacing(4)
-        out_box.addWidget(label("Pasta de saída", "FieldLabel"))
         out_row = QHBoxLayout()
-        out_row.setSpacing(6)
-        self.output_label = QLineEdit(self.output_dir)
-        self.output_label.setObjectName("MonoInput")
-        self.output_label.editingFinished.connect(
-            lambda: self._on_output_edited(self.output_label.text())
-        )
+        out_row.setSpacing(8)
+        out_row.addWidget(label("Salvar em", "Faint"))
+        self.output_label = ElidedLabel(self.output_dir, "OutputPath")
         out_row.addWidget(self.output_label, 1)
-
-        self.output_button = QPushButton("Escolher...")
-        self.output_button.setObjectName("Ghost")
+        self.output_button = QPushButton("Alterar…")
+        self.output_button.setObjectName("Link")
         self.output_button.setCursor(Qt.PointingHandCursor)
         self.output_button.clicked.connect(self.select_output_dir)
         out_row.addWidget(self.output_button)
-
-        self.reset_output_button = QPushButton("Padrão")
-        self.reset_output_button.setObjectName("Ghost")
+        self.reset_output_button = QPushButton("Usar padrão")
+        self.reset_output_button.setObjectName("Link")
         self.reset_output_button.setCursor(Qt.PointingHandCursor)
         self.reset_output_button.setToolTip("Usar a pasta padrão do projeto")
         self.reset_output_button.clicked.connect(self.reset_output_dir)
         out_row.addWidget(self.reset_output_button)
+        col.addLayout(out_row)
+        return frame
 
-        out_box.addLayout(out_row)
-        panel.body.addLayout(out_box)
-        return panel
+    def _build_format_step(self) -> QWidget:
+        frame, col, _head, self.format_badge = self._step(
+            2, "Formato", "como o vídeo é enquadrado no 9:16"
+        )
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        self.format_cards: dict[str, FormatOption] = {}
+        for idx, (lid, lay) in enumerate(LAYOUTS.items()):
+            card = FormatOption(lay)
+            card.clicked.connect(self._on_format_clicked)
+            self.format_cards[lid] = card
+            grid.addWidget(card, idx // 3, idx % 3)
+        for c in range(3):
+            grid.setColumnStretch(c, 1)
+        col.addLayout(grid)
 
-    def _build_quick_config_panel(self) -> QWidget:
-        panel = Panel("Legenda, cortes e prévia", "Configuração rápida", compact=True)
+        warn_row = QHBoxLayout()
+        warn_row.setSpacing(8)
+        self.format_warning = label("", "WarnText", wrap=True)
+        warn_row.addWidget(self.format_warning, 1)
+        self.format_warning_button = QPushButton("Escolher em Ajustes → Formato")
+        self.format_warning_button.setObjectName("Link")
+        self.format_warning_button.setCursor(Qt.PointingHandCursor)
+        self.format_warning_button.clicked.connect(
+            lambda: self.open_settings(SettingsDialog.PAGE_FORMAT)
+        )
+        warn_row.addWidget(self.format_warning_button)
+        self.format_warning_holder = QWidget()
+        self.format_warning_holder.setLayout(warn_row)
+        self.format_warning_holder.setVisible(False)
+        col.addWidget(self.format_warning_holder)
+        return frame
 
-        edit = QPushButton("Ajustes avançados →")
-        edit.setObjectName("Link")
-        edit.setToolTip("Abrir todos os ajustes de vídeo, legenda e IA")
-        edit.setCursor(Qt.PointingHandCursor)
-        edit.clicked.connect(self.open_settings)
-        self.summary_edit_button = edit
-        panel.add_head_widget(edit)
-
-        body_row = QHBoxLayout()
-        body_row.setSpacing(14)
-
-        # Subcoluna Esquerda: controles rápidos diretos
-        controls_col = QVBoxLayout()
-        controls_col.setSpacing(10)
-
-        self.captions_checkbox = Switch("Legendas dinâmicas")
+    def _build_caption_step(self) -> QWidget:
+        frame, col, head, self.caption_badge = self._step(3, "Legendas", "opcional")
+        self.captions_checkbox = Switch("Usar legendas")
         self.captions_checkbox.setChecked(self.options.captions_enabled)
         self.captions_checkbox.toggled.connect(self.on_captions_toggled)
-        controls_col.addWidget(self.captions_checkbox)
+        head.addWidget(self.captions_checkbox)
 
-        # Formato do short (pre-definido; detalhes e itens auxiliares em Ajustes)
-        layout_box = QVBoxLayout()
-        layout_box.setSpacing(4)
-        layout_box.addWidget(label("Formato do short", "FieldLabel"))
-        self.quick_layout_combo = QComboBox()
-        for lid, lay in LAYOUTS.items():
-            self.quick_layout_combo.addItem(f"{lay.name} ({lay.tag})", lid)
-        self.quick_layout_combo.setToolTip(
-            "Imagem auxiliar, música e texto da faixa ficam em Ajustes → Formato"
+        self.caption_body = QWidget()
+        body = QVBoxLayout(self.caption_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(8)
+        self.preset_row = QHBoxLayout()
+        self.preset_row.setSpacing(8)
+        body.addLayout(self.preset_row)
+        self.preset_cards: dict[str, CompactPresetCard] = {}
+        self._shown_presets: list[str] = []
+        self.more_presets_button = QPushButton(f"Ver todos ({len(VIRAL_PRESETS)}) →")
+        self.more_presets_button.setObjectName("MoreCard")
+        self.more_presets_button.setCursor(Qt.PointingHandCursor)
+        self.more_presets_button.setFixedHeight(76)
+        self.more_presets_button.setToolTip("Todos os estilos e ajustes finos de fonte, cor e posição")
+        self.more_presets_button.clicked.connect(
+            lambda: self.open_settings(SettingsDialog.PAGE_CAPTION)
         )
-        self.quick_layout_combo.currentIndexChanged.connect(self._on_quick_layout_changed)
-        layout_box.addWidget(self.quick_layout_combo)
-        controls_col.addLayout(layout_box)
-
-        # Seletor rápido de Preset de Legenda
-        preset_box = QVBoxLayout()
-        preset_box.setSpacing(4)
-        preset_box.addWidget(label("Estilo da legenda (Preset)", "FieldLabel"))
-        self.quick_preset_combo = QComboBox()
-        for pid, preset in VIRAL_PRESETS.items():
-            self.quick_preset_combo.addItem(f"{preset.name} ({preset.tag})", pid)
-        self.quick_preset_combo.addItem("Personalizado", "__custom__")
-        self.quick_preset_combo.currentIndexChanged.connect(
-            self._on_quick_preset_changed
+        self.custom_preset_note = label(
+            "Estilo personalizado em uso (ajustado em Ajustes → Legenda).", "Faint"
         )
-        preset_box.addWidget(self.quick_preset_combo)
-        controls_col.addLayout(preset_box)
+        body.addWidget(self.custom_preset_note)
+        col.addWidget(self.caption_body)
 
-        # Grade 2x2 de parâmetros rápidos
-        qgrid = QGridLayout()
-        qgrid.setHorizontalSpacing(8)
-        qgrid.setVerticalSpacing(8)
+        self.caption_off_note = label(
+            "Os cortes saem sem legenda. Ligue “Usar legendas” para escolher um estilo.",
+            "Faint",
+        )
+        col.addWidget(self.caption_off_note)
+        self._build_preset_strip(list(VIRAL_PRESETS)[:QUICK_PRESETS_SHOWN])
+        return frame
 
-        # Máximo de clipes
-        mc_box = QVBoxLayout()
-        mc_box.setSpacing(3)
-        mc_box.addWidget(label("Máx. cortes", "FieldLabel"))
+    def _build_preset_strip(self, preset_ids: list[str]):
+        while self.preset_row.count():
+            item = self.preset_row.takeAt(0)
+            w = item.widget()
+            if w is not None and w is not self.more_presets_button:
+                w.deleteLater()
+        self.preset_cards = {}
+        for pid in preset_ids:
+            card = CompactPresetCard(VIRAL_PRESETS[pid])
+            card.clicked.connect(self.select_quick_preset)
+            self.preset_cards[pid] = card
+            self.preset_row.addWidget(card, 1)
+        self.preset_row.addWidget(self.more_presets_button, 1)
+        self._shown_presets = list(preset_ids)
+
+    def _build_cuts_step(self) -> QWidget:
+        frame, col, head, self.cuts_badge = self._step(4, "Cortes", "quantos e de que tipo")
+        self.focus_toggle = QPushButton("+ Instrução para a IA (opcional)")
+        self.focus_toggle.setObjectName("DashedButton")
+        self.focus_toggle.setCursor(Qt.PointingHandCursor)
+        self.focus_toggle.clicked.connect(self._toggle_focus_input)
+        head.addWidget(self.focus_toggle)
+
+        row = QHBoxLayout()
+        row.setSpacing(18)
+
+        box = QVBoxLayout()
+        box.setSpacing(5)
+        box.addWidget(label("Quantos cortes", "FieldLabel"))
         self.quick_max_clips = QSpinBox()
         self.quick_max_clips.setRange(1, 50)
-        self.quick_max_clips.setValue(self.options.max_clips)
+        self.quick_max_clips.setMinimumWidth(90)
         self.quick_max_clips.valueChanged.connect(self._on_quick_params_changed)
-        mc_box.addWidget(self.quick_max_clips)
-        qgrid.addLayout(mc_box, 0, 0)
+        box.addWidget(self.quick_max_clips)
+        box.addStretch(1)
+        row.addLayout(box)
 
-        # Nota mínima
-        ms_box = QVBoxLayout()
-        ms_box.setSpacing(3)
-        ms_box.addWidget(label("Nota mín. (1-10)", "FieldLabel"))
-        self.quick_min_score = QSpinBox()
-        self.quick_min_score.setRange(1, 10)
-        self.quick_min_score.setValue(self.options.min_viral_score)
-        self.quick_min_score.valueChanged.connect(self._on_quick_params_changed)
-        ms_box.addWidget(self.quick_min_score)
-        qgrid.addLayout(ms_box, 0, 1)
-
-        # Modelo Whisper
-        wm_box = QVBoxLayout()
-        wm_box.setSpacing(3)
-        wm_box.addWidget(label("Whisper", "FieldLabel"))
-        self.quick_whisper_combo = QComboBox()
-        for w_label, w_val in (
-            ("large", "large"),
-            ("turbo", "turbo"),
-            ("medium", "medium"),
-            ("small", "small"),
-            ("base", "base"),
-            ("tiny", "tiny"),
-        ):
-            self.quick_whisper_combo.addItem(w_label, w_val)
-        self.quick_whisper_combo.currentIndexChanged.connect(
-            self._on_quick_params_changed
+        box = QVBoxLayout()
+        box.setSpacing(5)
+        box.addWidget(label("Duração", "FieldLabel"))
+        self.duration_seg = Segmented([name for name, _lo, _hi in DURATION_CHOICES])
+        self.duration_seg.setToolTip(
+            "  ·  ".join(f"{name}: {lo}–{hi}s" for name, lo, hi in DURATION_CHOICES)
         )
-        wm_box.addWidget(self.quick_whisper_combo)
-        qgrid.addLayout(wm_box, 1, 0)
+        self.duration_seg.setObjectName("ChoiceSeg")
+        self.duration_seg.changed.connect(self._on_duration_choice)
+        box.addWidget(self.duration_seg)
+        self.duration_hint = label("", "Faint")
+        box.addWidget(self.duration_hint)
+        box.addStretch(1)
+        row.addLayout(box)
 
-        # Resolução
-        res_box = QVBoxLayout()
-        res_box.setSpacing(3)
-        res_box.addWidget(label("Resolução", "FieldLabel"))
-        self.quick_res_combo = QComboBox()
-        for _res_label, w, h in RESOLUTIONS:
-            self.quick_res_combo.addItem(f"{w}×{h}", (w, h))
-        self.quick_res_combo.currentIndexChanged.connect(
-            self._on_quick_params_changed
+        box = QVBoxLayout()
+        box.setSpacing(5)
+        box.addWidget(label("Rigor da IA", "FieldLabel"))
+        self.rigor_seg = Segmented([name for name, _ in RIGOR_CHOICES])
+        self.rigor_seg.setToolTip(
+            "Mais cortes = nota mínima 6 · Equilibrado = 8 · Só os melhores = 9"
         )
-        res_box.addWidget(self.quick_res_combo)
-        qgrid.addLayout(res_box, 1, 1)
+        self.rigor_seg.setObjectName("ChoiceSeg")
+        self.rigor_seg.changed.connect(self._on_rigor_choice)
+        box.addWidget(self.rigor_seg)
+        self.rigor_hint = label("", "Faint")
+        box.addWidget(self.rigor_hint)
+        box.addStretch(1)
+        row.addLayout(box)
+        row.addStretch(1)
+        col.addLayout(row)
 
-        controls_col.addLayout(qgrid)
-        controls_col.addWidget(separator())
+        self.focus_input = QPlainTextEdit()
+        self.focus_input.setPlaceholderText(
+            "Ex.: foque em polêmicas entre jogadores e técnicos · priorize dicas práticas"
+        )
+        self.focus_input.setPlainText(self.options.focus_instruction)
+        self.focus_input.setFixedHeight(60)
+        self.focus_input.setTabChangesFocus(True)
+        self.focus_input.textChanged.connect(self._on_focus_edited)
+        self.focus_input.setVisible(False)
+        col.addWidget(self.focus_input)
+        self._sync_focus_toggle()
 
-        self.config_summary = label("", "FieldHint", wrap=True)
-        controls_col.addWidget(self.config_summary)
-        controls_col.addStretch(1)
+        self.review_checkbox = Switch("Revisar cortes antes de renderizar")
+        self.review_checkbox.setChecked(self.options.review_before_render)
+        self.review_checkbox.setToolTip(
+            "Pausa após a análise de IA para aprovar cortes e ajustar início/fim antes de renderizar"
+        )
+        self.review_checkbox.toggled.connect(self.on_review_toggled)
+        col.addWidget(self.review_checkbox)
+        return frame
 
-        # Mantém dicionário summary_values atualizado para inspeção e testes
-        self.summary_values = {
-            k: label("", "SummaryValue")
-            for k in (
-                "resolution",
-                "zoom",
-                "blur",
-                "crf",
-                "encoder",
-                "caption",
-                "transcribe",
-                "cuts",
-            )
-        }
-
-        body_row.addLayout(controls_col, 1)
-
-        # Subcoluna Direita: Prévia 9:16 ao vivo
-        preview_col = QVBoxLayout()
-        preview_col.setSpacing(6)
-        preview_head = QHBoxLayout()
-        preview_head.addWidget(label("PRÉVIA", "SectionTitle"))
-        preview_head.addStretch(1)
-        self.preview_ratio = label("9:16", "MiniPill")
-        preview_head.addWidget(self.preview_ratio)
-        preview_col.addLayout(preview_head)
-
-        self.phone_preview = PhonePreviewWidget(phone_width=132)
-        preview_col.addWidget(self.phone_preview, 0, Qt.AlignHCenter)
-
-        self.preview_resolution = label("1080 × 1920", "FieldHint")
-        self.preview_resolution.setAlignment(Qt.AlignCenter)
-        preview_col.addWidget(self.preview_resolution)
-
-        self.preview_caption_state = label("Legendas ativas", "FieldHint")
-        self.preview_caption_state.setAlignment(Qt.AlignCenter)
-        preview_col.addWidget(self.preview_caption_state)
-        preview_col.addStretch(1)
-
-        body_row.addLayout(preview_col, 0)
-        panel.body.addLayout(body_row)
-        return panel
-
-    def _build_action_bar(self) -> QHBoxLayout:
-        buttons_row = QHBoxLayout()
-        buttons_row.setSpacing(8)
-
-        self.process_button = QPushButton("▶   Processar vídeo")
+    def _build_action_bar(self) -> QVBoxLayout:
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        self.process_button = QPushButton("Gerar cortes")
         self.process_button.setObjectName("ProcessButton")
         self.process_button.setCursor(Qt.PointingHandCursor)
         self.process_button.clicked.connect(self.process)
-        buttons_row.addWidget(self.process_button, 1)
+        col.addWidget(self.process_button)
 
-        self.cancel_button = QPushButton("Cancelar")
-        self.cancel_button.setObjectName("Danger")
-        self.cancel_button.setCursor(Qt.PointingHandCursor)
-        self.cancel_button.setVisible(False)
-        self.cancel_button.setEnabled(False)
-        self.cancel_button.clicked.connect(self.cancel_processing)
-        buttons_row.addWidget(self.cancel_button)
-        return buttons_row
+        sum_row = QHBoxLayout()
+        sum_row.setSpacing(6)
+        self.config_summary = label("", "Faint")
+        sum_row.addWidget(self.config_summary)
+        self.summary_edit_button = QPushButton("alterar em Ajustes")
+        self.summary_edit_button.setObjectName("LinkUnderline")
+        self.summary_edit_button.setCursor(Qt.PointingHandCursor)
+        self.summary_edit_button.clicked.connect(
+            lambda: self.open_settings(SettingsDialog.PAGE_ADVANCED)
+        )
+        sum_row.addWidget(self.summary_edit_button)
+        sum_row.addStretch(1)
+        col.addLayout(sum_row)
 
-    def _build_progress_panel(self) -> QWidget:
-        panel = Panel("Etapas do pipeline", "Progresso", compact=True)
+        self.env_status_label = label("", "FieldHint", wrap=True)
+        self.env_status_label.setTextFormat(Qt.RichText)
+        col.addWidget(self.env_status_label)
+        return col
 
-        status = QHBoxLayout()
-        status.setContentsMargins(0, 0, 0, 0)
-        status.setSpacing(10)
-        self.stage_label = label("Pronto", "StageLabel")
-        self.percent_label = label("0%", "Percent")
-        status.addWidget(self.stage_label)
-        status.addWidget(self.percent_label)
-        status_holder = QWidget()
-        status_holder.setLayout(status)
-        panel.add_head_widget(status_holder)
+    def _build_preview_column(self) -> QVBoxLayout:
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        head = QHBoxLayout()
+        head.addWidget(label("Prévia", "StepTitleBig"))
+        head.addStretch(1)
+        self.preview_ratio = label("9:16", "MiniPill")
+        head.addWidget(self.preview_ratio)
+        col.addLayout(head)
+        self.phone_preview = PhonePreviewWidget(phone_width=180)
+        col.addWidget(self.phone_preview, 0, Qt.AlignHCenter)
+        self.preview_caption_state = label("", "Muted", wrap=True)
+        self.preview_caption_state.setAlignment(Qt.AlignCenter)
+        col.addWidget(self.preview_caption_state)
+        self.preview_resolution = label("1080 × 1920", "Faint")
+        self.preview_resolution.setAlignment(Qt.AlignCenter)
+        col.addWidget(self.preview_resolution)
+        col.addStretch(1)
+        holder = QVBoxLayout()
+        holder.addLayout(col)
+        return holder
 
+    # --- Página de processamento ---------------------------------------
+    def _build_run_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("Root")
+        col = QVBoxLayout(page)
+        col.setContentsMargins(0, 0, 0, 0)
+        col.setSpacing(14)
+
+        src = QVBoxLayout()
+        src.setSpacing(2)
+        self.run_source_title = ElidedLabel("", "FileName")
+        self.run_source_meta = label("", "Faint")
+        src.addWidget(self.run_source_title)
+        src.addWidget(self.run_source_meta)
+        col.addLayout(src)
+
+        prog = QFrame()
+        prog.setObjectName("Panel")
+        pl = QVBoxLayout(prog)
+        pl.setContentsMargins(20, 16, 20, 16)
+        pl.setSpacing(10)
+        top = QHBoxLayout()
+        self.percent_label = label("0%", "BigPercent")
+        top.addWidget(self.percent_label)
+        top.addStretch(1)
+        self.eta_label = label("calculando tempo…", "EtaLabel")
+        top.addWidget(self.eta_label)
+        pl.addLayout(top)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -637,151 +777,225 @@ class MainWindow(QMainWindow):
         self.progress_bar.valueChanged.connect(
             lambda value: self.percent_label.setText(f"{value}%")
         )
-        panel.body.addWidget(self.progress_bar)
+        pl.addWidget(self.progress_bar)
+        bottom = QHBoxLayout()
+        self.stage_label = label("Pronto", "StageLabel")
+        bottom.addWidget(self.stage_label)
+        bottom.addStretch(1)
+        self.elapsed_label = label("", "Faint")
+        bottom.addWidget(self.elapsed_label)
+        pl.addLayout(bottom)
+        col.addWidget(prog)
 
-        steps = QHBoxLayout()
-        steps.setSpacing(6)
-        self.pipe_steps: list[PipeStep] = []
-        for title, hint, _stages in PIPE_STEPS:
-            step = PipeStep(title, hint)
-            steps.addWidget(step, 1)
+        steps = QFrame()
+        steps.setObjectName("Panel")
+        sl = QVBoxLayout(steps)
+        sl.setContentsMargins(8, 8, 8, 8)
+        sl.setSpacing(2)
+        self.pipe_steps: list[StepRow] = []
+        for i, (title, hint, _stages) in enumerate(PIPE_STEPS):
+            step = StepRow(i + 1, title, hint)
+            sl.addWidget(step)
             self.pipe_steps.append(step)
-        panel.body.addLayout(steps)
-        return panel
+        col.addWidget(steps)
 
-    def _build_output_panel(self) -> QWidget:
-        panel = Panel("", "Saída e Resultados", compact=True)
+        self.error_banner = QFrame()
+        self.error_banner.setObjectName("ErrorBanner")
+        el = QVBoxLayout(self.error_banner)
+        el.setContentsMargins(16, 14, 16, 14)
+        el.setSpacing(8)
+        el.addWidget(label("Não foi possível concluir", "ErrorTitle"))
+        self.error_text = label("", "ErrorText", wrap=True)
+        self.error_text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        el.addWidget(self.error_text)
+        eb = QHBoxLayout()
+        eb.setSpacing(8)
+        back = QPushButton("Voltar e ajustar")
+        back.setObjectName("Ghost")
+        back.setCursor(Qt.PointingHandCursor)
+        back.clicked.connect(lambda: self._show_page(PAGE_CONFIG))
+        eb.addWidget(back)
+        self.retry_button = QPushButton("Tentar de novo")
+        self.retry_button.setObjectName("Primary")
+        self.retry_button.setCursor(Qt.PointingHandCursor)
+        self.retry_button.clicked.connect(self.process)
+        eb.addWidget(self.retry_button)
+        eb.addStretch(1)
+        el.addLayout(eb)
+        self.error_banner.setVisible(False)
+        col.addWidget(self.error_banner)
 
-        # Abas para alternar entre Cortes Gerados e Log de Execução
-        self.output_tabs = Segmented(["Cortes gerados", "Log de execução"])
-        self.output_tabs.changed.connect(self._on_output_tab_changed)
-        panel.add_head_widget(self.output_tabs)
+        self.run_log_slot = QVBoxLayout()
+        self.run_log_slot.addWidget(self.log_box)
+        col.addLayout(self.run_log_slot)
 
-        self.output_stack = QStackedWidget()
-
-        # --- Página 0: Cortes Gerados
-        self.results_section = self._build_results_section()
-        self.output_stack.addWidget(self.results_section)
-
-        # --- Página 1: Log de Execução
-        log_page = QWidget()
-        log_layout = QVBoxLayout(log_page)
-        log_layout.setContentsMargins(0, 0, 0, 0)
-        log_layout.setSpacing(6)
-
-        log_head = QHBoxLayout()
-        log_head.addWidget(
-            label("Saída detalhada do processamento em tempo real", "Faint")
+        foot = QHBoxLayout()
+        foot.setSpacing(12)
+        foot.addStretch(1)
+        self.run_hint = label(
+            "Você pode usar Projetos e Ajustes enquanto isso — avisamos quando terminar.",
+            "Faint",
         )
-        log_head.addStretch(1)
+        foot.addWidget(self.run_hint)
+        self.cancel_button = QPushButton("Cancelar")
+        self.cancel_button.setObjectName("Danger")
+        self.cancel_button.setCursor(Qt.PointingHandCursor)
+        self.cancel_button.setToolTip("Esc")
+        self.cancel_button.setEnabled(False)
+        self.cancel_button.clicked.connect(self.cancel_processing)
+        foot.addWidget(self.cancel_button)
+        col.addLayout(foot)
+        col.addStretch(1)
+        return page
+
+    def _build_log_box(self) -> CollapsibleBox:
+        box = CollapsibleBox("Ver detalhes técnicos (log)", expanded=False)
+        head = QHBoxLayout()
+        head.addWidget(label("Saída detalhada do processamento", "Faint"))
+        head.addStretch(1)
         clear_log = QPushButton("Limpar log")
         clear_log.setObjectName("Link")
         clear_log.setCursor(Qt.PointingHandCursor)
-        log_head.addWidget(clear_log)
-        log_layout.addLayout(log_head)
-
+        head.addWidget(clear_log)
+        box.set_content_layout(head)
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("Log")
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(LOG_MAX_LINES)
+        self.log_view.setMinimumHeight(220)
         self.log_view.setPlainText("Aguardando um vídeo para processar.")
         clear_log.clicked.connect(self.log_view.clear)
-        log_layout.addWidget(self.log_view, 1)
+        box.add_widget(self.log_view)
+        return box
 
-        self.output_stack.addWidget(log_page)
-
-        # Inicia mostrando o estado vazio dos cortes (ou log quando processar)
-        self.output_tabs.set_current(0)
-        self.output_stack.setCurrentIndex(0)
-
-        panel.body.addWidget(self.output_stack, 1)
-        return panel
-
-    def _build_results_section(self) -> QWidget:
-        section = QWidget()
-        layout = QVBoxLayout(section)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(10)
+    # --- Página de resultados ------------------------------------------
+    def _build_results_page(self) -> QWidget:
+        page = QWidget()
+        page.setObjectName("Root")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(24, 18, 24, 0)
+        outer.setSpacing(12)
 
         head = QHBoxLayout()
-        head.setSpacing(8)
-        self.result_count = label("0 cortes", "MiniPill")
-        head.addWidget(self.result_count)
-
-        self.result_path = label(
-            "Nenhum corte gerado nesta sessão.", "FieldHint", wrap=True
-        )
-        head.addWidget(self.result_path, 1)
-
+        head.setSpacing(10)
+        titles = QVBoxLayout()
+        titles.setSpacing(2)
+        self.results_title = label("0 cortes prontos", "PageTitle")
+        self.result_count = self.results_title
+        titles.addWidget(self.results_title)
+        self.result_path = ElidedLabel("", "ClipPath")
+        titles.addWidget(self.result_path)
+        head.addLayout(titles, 1)
         self.report_button = QPushButton("Abrir relatório")
         self.report_button.setObjectName("Ghost")
         self.report_button.setCursor(Qt.PointingHandCursor)
         self.report_button.clicked.connect(self._open_report)
         head.addWidget(self.report_button)
-
         self.open_folder_button = QPushButton("Abrir pasta")
         self.open_folder_button.setObjectName("Ghost")
         self.open_folder_button.setCursor(Qt.PointingHandCursor)
         self.open_folder_button.clicked.connect(self._open_output_folder)
         head.addWidget(self.open_folder_button)
-
-        layout.addLayout(head)
+        self.new_video_button = QPushButton("Novo vídeo")
+        self.new_video_button.setObjectName("Primary")
+        self.new_video_button.setCursor(Qt.PointingHandCursor)
+        self.new_video_button.clicked.connect(self.start_new_video)
+        head.addWidget(self.new_video_button)
+        outer.addLayout(head)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        host = QWidget()
+        host.setObjectName("Root")
+        hl = QVBoxLayout(host)
+        hl.setContentsMargins(0, 0, 6, 18)
+        hl.setSpacing(12)
 
-        self.results_grid_host = QWidget()
-        self.results_grid_host.setObjectName("Root")
-        self.results_grid = QGridLayout(self.results_grid_host)
-        self.results_grid.setContentsMargins(0, 0, 4, 0)
-        self.results_grid.setHorizontalSpacing(10)
-        self.results_grid.setVerticalSpacing(10)
-
-        empty = label(
-            "Os cortes gerados aparecerão aqui assim que o processamento terminar.\n"
-            "Para consultar cortes de vídeos anteriores, acesse a aba 'Projetos' no topo.",
-            "ResultsEmpty",
+        self.results_empty = QFrame()
+        self.results_empty.setObjectName("ResultsEmptyBox")
+        rel = QVBoxLayout(self.results_empty)
+        rel.setContentsMargins(20, 22, 20, 22)
+        rel.setSpacing(10)
+        self.results_empty_text = label(
+            "Nenhum corte atingiu os critérios. Tente “Rigor da IA: Mais cortes” "
+            "ou mude a instrução para a IA — a transcrição fica em cache, então a "
+            "próxima tentativa é mais rápida.",
+            "Muted",
             wrap=True,
         )
-        empty.setAlignment(Qt.AlignCenter)
-        self.results_grid.addWidget(empty, 0, 0)
+        self.results_empty_text.setAlignment(Qt.AlignCenter)
+        rel.addWidget(self.results_empty_text)
+        retry = QPushButton("Ajustar e tentar de novo")
+        retry.setObjectName("Primary")
+        retry.setCursor(Qt.PointingHandCursor)
+        retry.clicked.connect(lambda: self._show_page(PAGE_CONFIG))
+        rr = QHBoxLayout()
+        rr.addStretch(1)
+        rr.addWidget(retry)
+        rr.addStretch(1)
+        rel.addLayout(rr)
+        self.results_empty.setVisible(False)
+        hl.addWidget(self.results_empty)
 
-        scroll.setWidget(self.results_grid_host)
-        layout.addWidget(scroll, 1)
-        return section
+        self.results_grid = FlowGrid(min_col_width=250)
+        hl.addWidget(self.results_grid)
+        self.results_log_slot = QVBoxLayout()
+        hl.addLayout(self.results_log_slot)
+        hl.addStretch(1)
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+        return page
 
     # ------------------------------------------------------------------
-    # Sincronização e ações
+    # Fonte (link ou arquivo)
     # ------------------------------------------------------------------
-    def _on_output_tab_changed(self, index: int):
-        self.output_stack.setCurrentIndex(index)
-
-    def _on_source_changed(self, index: int):
-        self.source_stack.setCurrentIndex(index)
-        self._update_process_enabled()
-
-    def _on_link_edited(self, text: str):
-        if text.strip() and self.source_tabs.current() != 0:
-            self.source_tabs.set_current(0)
+    def _on_link_edited(self, _text: str = ""):
+        state = link_state(self.video_link.text())
+        if state == "invalid":
+            self.source_hint.setText(
+                "Isso não parece um link. Cole um endereço como https://www.youtube.com/watch?v=…"
+            )
+        elif state == "ok":
+            self.source_hint.setText("✓ Link reconhecido. Pressione Enter para gerar os cortes.")
+        else:
+            self.source_hint.setText(
+                "Links do YouTube ou arquivos MP4, MKV, MOV, AVI, WEBM, M4V  ·  "
+                "Ctrl+O procura um arquivo  ·  Enter gera os cortes"
+            )
+        self.source_hint.setProperty(
+            "state", {"invalid": "error", "ok": "ok"}.get(state, "idle")
+        )
+        self.source_hint.style().unpolish(self.source_hint)
+        self.source_hint.style().polish(self.source_hint)
         self._update_process_enabled()
 
     def _active_source(self) -> tuple[str | None, str | None]:
-        """Retorna (yt_link, video_path) apenas da aba visivel."""
-        if self.source_tabs.current() == 0:
-            link = self.video_link.text().strip()
-            return (link or None), None
-        return None, self.video_path
+        """Retorna (yt_link, video_path): o arquivo escolhido tem prioridade."""
+        if self.video_path:
+            return None, self.video_path
+        if link_state(self.video_link.text()) == "ok":
+            return normalize_link(self.video_link.text()), None
+        return None, None
 
     def _update_process_enabled(self):
-        if self.worker is not None:
-            return
         link, path = self._active_source()
         ready = bool(link) or bool(path)
-        self.process_button.setEnabled(ready)
-        self.process_button.setToolTip(
-            "Ctrl+Enter" if ready else "Cole um link ou selecione um vídeo para começar"
-        )
+        busy = self.worker is not None
+        self.process_button.setEnabled(ready and not busy)
+        if busy:
+            text = "Processando…"
+        elif ready:
+            text = "Gerar cortes   ·   Ctrl+Enter"
+        elif link_state(self.video_link.text()) == "invalid":
+            text = "Confira o link do vídeo"
+        else:
+            text = "Escolha um vídeo para começar"
+        self.process_button.setText(text)
+        self._set_badge(self.source_badge, 1, "done" if ready else "active")
+        for b, n in ((self.format_badge, 2), (self.caption_badge, 3), (self.cuts_badge, 4)):
+            self._set_badge(b, n, "idle")
 
     @staticmethod
     def _configured_keys() -> tuple[list[str], list[str]]:
@@ -803,7 +1017,7 @@ class MainWindow(QMainWindow):
         keys, _providers = self._configured_keys()
         if not keys:
             issues.append(
-                "Nenhuma chave de IA configurada. Copie .env.example para .env e preencha API_KEY."
+                "Nenhuma chave de IA configurada. Adicione uma em Ajustes → Contas e IA."
             )
         return issues
 
@@ -822,11 +1036,11 @@ class MainWindow(QMainWindow):
                 f" ({', '.join(providers)})"
             )
         else:
-            ia = f'<span style="color:{bad}">✕ Sem chave de IA no .env</span>'
+            ia = f'<span style="color:{bad}">✕ Sem chave de IA — adicione em Ajustes → Contas e IA</span>'
         self.env_status_label.setText(f"{ff} &nbsp;·&nbsp; {ia}")
 
     # --- Arrastar e soltar video na janela
-    VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v"}
+    VIDEO_EXTS = VIDEO_EXTS
 
     def _dropped_video(self, event) -> str | None:
         mime = event.mimeData()
@@ -834,20 +1048,32 @@ class MainWindow(QMainWindow):
             return None
         for url in mime.urls():
             local = url.toLocalFile()
-            if local and Path(local).suffix.lower() in self.VIDEO_EXTS:
+            if local and Path(local).suffix.lower() in VIDEO_EXTS:
                 return local
         return None
 
+    def _set_drag_highlight(self, on: bool):
+        self.source_drop.setProperty("drag", "true" if on else "false")
+        self.source_drop.style().unpolish(self.source_drop)
+        self.source_drop.style().polish(self.source_drop)
+
     def dragEnterEvent(self, event):  # noqa: N802
         if self.worker is None and self._dropped_video(event):
+            self._set_drag_highlight(True)
             event.acceptProposedAction()
         else:
             event.ignore()
 
+    def dragLeaveEvent(self, event):  # noqa: N802
+        self._set_drag_highlight(False)
+        super().dragLeaveEvent(event)
+
     def dropEvent(self, event):  # noqa: N802
+        self._set_drag_highlight(False)
         path = self._dropped_video(event)
         if path and self.worker is None:
             self.workspace_button.setChecked(True)
+            self._show_page(PAGE_CONFIG)
             self._set_selected_video(path)
             event.acceptProposedAction()
 
@@ -868,6 +1094,11 @@ class MainWindow(QMainWindow):
             if callable(wait):
                 wait(5000)
         super().closeEvent(event)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if getattr(self, "toast", None) is not None and self.toast.isVisible():
+            self.toast._reposition()
 
     # --- Frames reais (previa e miniaturas)
     def _set_preview_frame(self, image):
@@ -899,18 +1130,24 @@ class MainWindow(QMainWindow):
         self._thumb_targets.setdefault(key, []).append((button, label_text))
         self.frames.request_clip_thumb(clip_path)
 
+    def _run_process_shortcut(self):
+        if (
+            self.main_stack.currentIndex() == 0
+            and self.workspace_stack.currentIndex() == PAGE_CONFIG
+            and self.process_button.isEnabled()
+        ):
+            self.process()
+
     def _install_shortcuts(self):
         def nav(i):
             btn = self.nav_group.button(i)
             if btn is not None and btn.isEnabled():
                 btn.setChecked(True)
 
-        def run_process():
-            if self.process_button.isEnabled():
-                self.process()
-
         def run_select():
-            if self.select_button.isEnabled():
+            if self.worker is None:
+                self.workspace_button.setChecked(True)
+                self._show_page(PAGE_CONFIG)
                 self.select_video()
 
         def run_cancel():
@@ -918,8 +1155,8 @@ class MainWindow(QMainWindow):
                 self.cancel_processing()
 
         bindings = [
-            ("Ctrl+Return", run_process),
-            ("Ctrl+Enter", run_process),
+            ("Ctrl+Return", self._run_process_shortcut),
+            ("Ctrl+Enter", self._run_process_shortcut),
             ("Ctrl+O", run_select),
             ("Escape", run_cancel),
             ("Ctrl+1", lambda: nav(0)),
@@ -932,34 +1169,30 @@ class MainWindow(QMainWindow):
             sc.activated.connect(fn)
             self._shortcuts.append(sc)
 
-    def _on_output_edited(self, text: str):
-        folder = text.strip()
-        if folder and folder != self.output_dir:
-            self.output_dir = folder
-            self.controller.save_output_dir(folder)
-
     def select_video(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Selecionar vídeo", "", "Vídeos (*.mp4 *.mkv *.mov *.avi)"
-        )
+        file_path, _ = QFileDialog.getOpenFileName(self, "Escolher vídeo", "", VIDEO_FILTER)
         if file_path:
             self._set_selected_video(file_path)
 
     def _set_selected_video(self, file_path: str):
         self.video_path = file_path
-        self.path_label.setText(file_path)
         p = Path(file_path)
+        self.path_label.setText(p.name)
         try:
             size_mb = p.stat().st_size / (1024 * 1024)
-            self.file_size_label.setText(f"{p.name} · {size_mb:.1f} MB")
+            self.file_size_label.setText(f"{size_mb:.1f} MB  ·  {p.parent}")
         except OSError:
-            self.file_size_label.setText(p.name)
+            self.file_size_label.setText(str(p.parent))
         self.frames.request_preview(file_path)
         ext = p.suffix.lstrip(".").upper() or "VID"
         self.file_badge.setText(ext[:4])
-        self.select_button.setVisible(False)
+        # Um arquivo escolhido substitui qualquer link digitado: uma origem por vez.
+        self.video_link.blockSignals(True)
+        self.video_link.clear()
+        self.video_link.blockSignals(False)
+        self._on_link_edited()
+        self.source_drop.setVisible(False)
         self.file_selected_card.setVisible(True)
-        self.source_tabs.set_current(1)
         self._update_process_enabled()
 
     def clear_video(self):
@@ -967,9 +1200,10 @@ class MainWindow(QMainWindow):
         self.path_label.setText("Nenhum vídeo selecionado")
         self.file_size_label.setText("—")
         self.file_selected_card.setVisible(False)
-        self.select_button.setVisible(True)
+        self.source_drop.setVisible(True)
         self._set_preview_frame(None)
         self._update_process_enabled()
+        self.video_link.setFocus()
 
     def select_output_dir(self):
         folder = QFileDialog.getExistingDirectory(
@@ -984,6 +1218,9 @@ class MainWindow(QMainWindow):
         self.output_dir = self.controller.reset_output_dir()
         self.output_label.setText(self.output_dir)
 
+    # ------------------------------------------------------------------
+    # Controles rápidos
+    # ------------------------------------------------------------------
     def on_captions_toggled(self, checked: bool):
         if self._syncing_quick:
             return
@@ -991,52 +1228,76 @@ class MainWindow(QMainWindow):
         self._save_options()
         self._refresh_summary()
 
-    def _on_quick_preset_changed(self, index: int):
-        if self._syncing_quick or index < 0:
-            return
-        preset_id = self.quick_preset_combo.itemData(index)
-        if preset_id and preset_id in VIRAL_PRESETS:
-            apply_preset(self.options, preset_id)
-            self.options.captions_enabled = True
-            self._save_options()
-            self._refresh_summary()
-
-    def _on_quick_layout_changed(self, *_args):
+    def on_review_toggled(self, checked: bool):
         if self._syncing_quick:
             return
-        lid = self.quick_layout_combo.currentData()
-        if not lid:
-            return
-        self.options.layout_id = lid
+        self.options.review_before_render = bool(checked)
         self._save_options()
         self._refresh_summary()
-        missing = missing_requirements(get_layout(lid), self.options.aux_image_path)
-        if missing:
-            self.log_view.appendPlainText(
-                "Formato escolhido precisa de itens auxiliares: abra Ajustes → Formato."
-            )
+
+    def select_quick_preset(self, preset_id: str):
+        if preset_id not in VIRAL_PRESETS:
+            return
+        apply_preset(self.options, preset_id)
+        self._save_options()
+        self._refresh_summary()
+
+    def _on_format_clicked(self, layout_id: str):
+        if self._syncing_quick or layout_id not in LAYOUTS:
+            return
+        self.options.layout_id = layout_id
+        self._save_options()
+        self._refresh_summary()
+
+    def _on_duration_choice(self, index: int):
+        if self._syncing_quick or not (0 <= index < len(DURATION_CHOICES)):
+            return
+        _name, lo, hi = DURATION_CHOICES[index]
+        self.options.min_clip_duration = lo
+        self.options.max_clip_duration = hi
+        self._save_options()
+        self._refresh_summary()
+
+    def _on_rigor_choice(self, index: int):
+        if self._syncing_quick or not (0 <= index < len(RIGOR_CHOICES)):
+            return
+        self.options.min_viral_score = RIGOR_CHOICES[index][1]
+        self._save_options()
+        self._refresh_summary()
 
     def _on_quick_params_changed(self, *_args):
         if self._syncing_quick:
             return
         self.options.max_clips = self.quick_max_clips.value()
-        self.options.min_viral_score = self.quick_min_score.value()
-        w_val = self.quick_whisper_combo.currentData()
-        if w_val:
-            self.options.whisper_model = w_val
-        res_val = self.quick_res_combo.currentData()
-        if res_val:
-            self.options.width, self.options.height = res_val
         self._save_options()
         self._refresh_summary()
+
+    def _toggle_focus_input(self):
+        show = self.focus_input.isHidden()
+        self.focus_input.setVisible(show)
+        if show:
+            self.focus_input.setFocus()
+        self._sync_focus_toggle()
+
+    def _sync_focus_toggle(self):
+        text = self.focus_input.toPlainText().strip()
+        self.focus_toggle.setToolTip(text or "Diga à IA que tipo de momento procurar")
+        if not self.focus_input.isHidden():
+            self.focus_toggle.setText("− Ocultar instrução para a IA")
+        elif text:
+            self.focus_toggle.setText("✎ Instrução para a IA (ativa)")
+        else:
+            self.focus_toggle.setText("+ Instrução para a IA (opcional)")
 
     def _on_embedded_settings_changed(self, updated_options: ProcessingOptions):
         self.options = updated_options
         self._save_options()
         self._refresh_summary()
 
-    def open_settings(self):
+    def open_settings(self, page: int | None = None):
         self.settings_button.setChecked(True)
+        if page is not None:
+            self.settings_view.set_active_tab(page)
 
     def open_projects(self):
         self.projects_button.setChecked(True)
@@ -1048,28 +1309,30 @@ class MainWindow(QMainWindow):
             and str(Path(cur_folder).resolve()).lower()
             == str(Path(project_dir).resolve()).lower()
         ):
-            self._clear_results_grid()
+            self.results_grid.clear()
             self.clip_paths = []
             self.report_path = None
-            self.result_count.setText("0 cortes")
-            self.result_path.setText("Projeto excluído.")
+            self.last_clips = []
+            if self.workspace_stack.currentIndex() == PAGE_RESULTS:
+                self._show_page(PAGE_CONFIG)
 
     def _on_clip_published_changed_in_dialog(
         self, report_path: str, _clip_idx: int, _published: bool
     ):
-        if self.report_path and Path(self.report_path).exists():
+        if self.report_path and Path(self.report_path).exists() and report_path:
             if (
                 str(Path(self.report_path).resolve()).lower()
                 == str(Path(report_path).resolve()).lower()
             ):
-                updated_clips = load_report(self.report_path)
                 self._render_results(
-                    updated_clips, self.clip_paths, self.report_path
+                    load_report(self.report_path), self.clip_paths, self.report_path
                 )
 
     def _on_focus_edited(self):
         self.options.focus_instruction = self.focus_input.toPlainText().strip()
         self._save_options()
+        if self.focus_input.isHidden():
+            self._sync_focus_toggle()
 
     def _save_options(self):
         self.controller.save_options(self.options)
@@ -1077,90 +1340,146 @@ class MainWindow(QMainWindow):
     def _refresh_summary(self):
         o = self.options
         active_preset_id = detect_active_preset(o)
-        preset_name = (
-            VIRAL_PRESETS[active_preset_id].name
-            if active_preset_id in VIRAL_PRESETS
-            else None
-        )
-        caption_summary = (
-            (
-                f"{preset_name} · {o.caption_font} {o.caption_font_size}px"
-                if preset_name
-                else f"Custom · {o.caption_font} {o.caption_font_size}px"
-            )
-            if o.captions_enabled
-            else "desligada"
-        )
-        values = {
-            "resolution": f"{o.width} × {o.height}",
-            "zoom": f"{o.zoom:.2f}×",
-            "blur": f"{o.blur_sigma:.1f}",
-            "crf": f"{o.crf} · {o.preset}",
-            "encoder": o.encoder or "auto",
-            "caption": caption_summary,
-            "transcribe": TRANSCRIBE_LABELS.get(
-                o.caption_transcribe_mode, o.caption_transcribe_mode
-            ),
-            "cuts": (
-                f"até {o.max_clips} · nota >= {o.min_viral_score} · "
-                f"{o.min_clip_duration}–{o.max_clip_duration}s"
-            ),
-        }
-        for key, value in values.items():
-            if key in self.summary_values:
-                self.summary_values[key].setText(value)
-
+        is_preset = active_preset_id in VIRAL_PRESETS
+        preset_name = VIRAL_PRESETS[active_preset_id].name if is_preset else None
+        layout_name = get_layout(o.layout_id).name
+        caption_txt = (preset_name or "legenda personalizada") if o.captions_enabled else "sem legenda"
+        ai_txt = "IA automática" if not o.ai_model else f"IA {o.ai_model.split(':', 1)[-1]}"
         self.config_summary.setText(
-            f"Formato: {get_layout(o.layout_id).name}  ·  "
-            f"Duração: {o.min_clip_duration}–{o.max_clip_duration}s  ·  "
-            f"Zoom: {o.zoom:.2f}×  ·  "
-            f"Encoder: {o.encoder or 'auto'} (CRF {o.crf})"
+            f"{_plural(o.max_clips, 'corte', 'cortes')} · {layout_name} · {caption_txt} · "
+            f"{o.width}×{o.height} · Whisper {o.whisper_model} · {ai_txt} —"
         )
 
-        # Sincroniza controles rápidos sem disparar sinais recursivos
+        # Estilos visiveis: garante que o estilo em uso aparece na faixa.
+        if is_preset and active_preset_id not in self._shown_presets:
+            shown = list(VIRAL_PRESETS)[: QUICK_PRESETS_SHOWN - 1] + [active_preset_id]
+            self._build_preset_strip(shown)
+
         self._syncing_quick = True
         try:
             self.captions_checkbox.setChecked(o.captions_enabled)
-            target_pid = active_preset_id if active_preset_id in VIRAL_PRESETS else "__custom__"
-            for idx in range(self.quick_preset_combo.count()):
-                if self.quick_preset_combo.itemData(idx) == target_pid:
-                    self.quick_preset_combo.setCurrentIndex(idx)
-                    break
-
+            self.review_checkbox.setChecked(o.review_before_render)
             self.quick_max_clips.setValue(o.max_clips)
-            self.quick_min_score.setValue(o.min_viral_score)
-            idx_layout = self.quick_layout_combo.findData(o.layout_id)
-            if idx_layout >= 0:
-                self.quick_layout_combo.setCurrentIndex(idx_layout)
+            for lid, card in self.format_cards.items():
+                card.set_selected(lid == o.layout_id)
+            for pid, card in self.preset_cards.items():
+                card.set_selected(pid == active_preset_id)
 
-            for idx in range(self.quick_whisper_combo.count()):
-                if self.quick_whisper_combo.itemData(idx) == o.whisper_model:
-                    self.quick_whisper_combo.setCurrentIndex(idx)
-                    break
+            d_idx = next(
+                (i for i, (_n, lo, hi) in enumerate(DURATION_CHOICES)
+                 if lo == o.min_clip_duration and hi == o.max_clip_duration),
+                -1,
+            )
+            if d_idx >= 0:
+                self.duration_seg.set_current(d_idx)
+                self.duration_hint.setText(f"{o.min_clip_duration}–{o.max_clip_duration}s por corte")
+            else:
+                self.duration_seg.clear_selection()
+                self.duration_hint.setText(
+                    f"Atual: {o.min_clip_duration}–{o.max_clip_duration}s (personalizado)"
+                )
 
-            for idx in range(self.quick_res_combo.count()):
-                if self.quick_res_combo.itemData(idx) == (o.width, o.height):
-                    self.quick_res_combo.setCurrentIndex(idx)
-                    break
+
+            r_idx = next(
+                (i for i, (_n, score) in enumerate(RIGOR_CHOICES) if score == o.min_viral_score),
+                -1,
+            )
+            if r_idx >= 0:
+                self.rigor_seg.set_current(r_idx)
+            else:
+                self.rigor_seg.clear_selection()
+                self.rigor_hint.setText(f"Atual: nota mínima {o.min_viral_score} (personalizado)")
+            self.rigor_hint.setVisible(r_idx < 0)
         finally:
             self._syncing_quick = False
 
-        # Atualiza prévia 9:16
+        self.caption_body.setVisible(o.captions_enabled)
+        self.caption_off_note.setVisible(not o.captions_enabled)
+        self.custom_preset_note.setVisible(o.captions_enabled and not is_preset)
+
+        missing = missing_requirements(get_layout(o.layout_id), o.aux_image_path)
+        self.format_warning_holder.setVisible(bool(missing))
+        if missing:
+            self.format_warning.setText(
+                f"⚠ “{layout_name}” precisa de uma imagem auxiliar antes de gerar os cortes."
+            )
+
         self.phone_preview.set_options(o)
         self.preview_resolution.setText(f"{o.width} × {o.height}")
         self.preview_ratio.setText(
-            "1:1"
-            if o.width == o.height
-            else ("16:9" if o.width > o.height else "9:16")
+            "1:1" if o.width == o.height else ("16:9" if o.width > o.height else "9:16")
         )
-        self.preview_caption_state.setText(
-            f"{preset_name or 'Personalizado'}"
-            if o.captions_enabled
-            else "Sem legenda"
-        )
+        self.preview_caption_state.setText(f"{layout_name} · {caption_txt}")
+        self._update_process_enabled()
 
+    # ------------------------------------------------------------------
+    # Processamento
+    # ------------------------------------------------------------------
     def _on_progress_updated(self, value: int):
         self.progress_bar.setValue(value)
+        self._update_eta()
+        if self.worker is not None and self._stage_text and self._stage_text != STAGE_LABELS["revisao"]:
+            self._set_header_status(f"{self._stage_text} · {value}%", "busy")
+
+    def _update_eta(self):
+        if not self._run_started:
+            return
+        elapsed = time.monotonic() - self._run_started
+        value = self.progress_bar.value()
+        if value >= 100:
+            self.eta_label.setText("concluído")
+        elif value >= 8 and elapsed > 8:
+            remaining = elapsed * (100 - value) / max(1, value)
+            if remaining < 60:
+                self.eta_label.setText("≈ menos de 1 min restante")
+            else:
+                mins = int(round(remaining / 60))
+                self.eta_label.setText(f"≈ {_plural(mins, 'min restante', 'min restantes')}")
+        else:
+            self.eta_label.setText("calculando tempo…")
+
+    def _tick(self):
+        if not self._run_started:
+            return
+        self.elapsed_label.setText(
+            f"Tempo decorrido {_fmt_secs(time.monotonic() - self._run_started)}"
+        )
+        self._update_eta()
+
+    def _start_new_run_ui(self, yt_link, video_path):
+        self.error_banner.setVisible(False)
+        self.config_banner.setVisible(False)
+        self.progress_bar.setValue(0)
+        self.log_view.clear()
+        self.log_box.set_expanded(False)
+        self._step_started = {}
+        self._active_step = -1
+        for step in self.pipe_steps:
+            step.set_state("idle")
+        caption_hint = "vídeo vertical 9:16" + (
+            " + legendas" if self.options.captions_enabled else ""
+        )
+        self.pipe_steps[3].set_hint(caption_hint)
+        if video_path:
+            self.run_source_title.setText(Path(video_path).name)
+        else:
+            self.run_source_title.setText(yt_link or "")
+        active_preset_id = detect_active_preset(self.options)
+        cap = (
+            VIRAL_PRESETS[active_preset_id].name
+            if self.options.captions_enabled and active_preset_id in VIRAL_PRESETS
+            else ("legenda personalizada" if self.options.captions_enabled else "sem legenda")
+        )
+        self.run_source_meta.setText(
+            f"{get_layout(self.options.layout_id).name} · {cap} · "
+            f"até {_plural(self.options.max_clips, 'corte', 'cortes')}"
+        )
+        self.stage_label.setText("Etapa 1 de 5 · Iniciando")
+        self.eta_label.setText("calculando tempo…")
+        self.elapsed_label.setText("")
+        self._run_started = time.monotonic()
+        self._clock.start()
+        self._show_page(PAGE_RUN)
 
     def process(self):
         if self.worker is not None:
@@ -1170,7 +1489,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Nada para processar",
-                "Cole o link de um vídeo na aba Link ou selecione um arquivo na aba Arquivo.",
+                "Cole o link de um vídeo ou escolha um arquivo no passo 1.",
             )
             return
         if video_path and not Path(video_path).is_file():
@@ -1189,97 +1508,99 @@ class MainWindow(QMainWindow):
             self._refresh_env_status()
             QMessageBox.warning(
                 self,
-                "Configuração incompleta",
-                "Antes de processar, resolva:\n\n• " + "\n• ".join(issues),
+                "Falta pouco",
+                "Antes de gerar os cortes, resolva:\n\n• " + "\n• ".join(issues),
             )
             return
 
-        self.set_busy(True)
-        self.progress_bar.setValue(0)
-        self.log_view.clear()
-        self.output_tabs.set_current(1)
-        for step in self.pipe_steps:
-            step.set_state("idle")
-
         self.options.captions_enabled = self.captions_checkbox.isChecked()
+        self.options.review_before_render = self.review_checkbox.isChecked()
         self.options.focus_instruction = self.focus_input.toPlainText().strip()
 
+        self._start_new_run_ui(yt_link, video_path)
+        self.set_busy(True)
+        # Copia: mudar Ajustes durante o processamento não afeta o vídeo em andamento.
         self.worker = self.controller.start_pipeline(
             yt_link=yt_link,
             video_path=video_path,
             output_dir=self.output_dir,
-            options=self.options,
+            options=copy.deepcopy(self.options),
         )
         if not self.worker:
             self.worker = None
             self.set_busy(False)
+            self._clock.stop()
+            self._run_started = 0.0
+            self._show_page(PAGE_CONFIG)
             self._update_process_enabled()
 
     def cancel_processing(self):
         if self.controller.cancel_pipeline():
             self.cancel_button.setEnabled(False)
-            self.cancel_button.setText("Cancelando...")
-            self.stage_label.setText("Cancelando...")
-            self._set_header_status("Cancelando...", "busy")
-            self.log_view.appendPlainText(
-                "Solicitando cancelamento do pipeline..."
-            )
+            self.cancel_button.setText("Cancelando…")
+            self.stage_label.setText("Cancelando…")
+            self._set_header_status("Cancelando…", "busy")
+            self.log_view.appendPlainText("Solicitando cancelamento do pipeline...")
 
     def set_busy(self, busy: bool):
         self.select_button.setEnabled(not busy)
         self.clear_file_button.setEnabled(not busy)
         self.change_file_button.setEnabled(not busy)
-        self.process_button.setEnabled(not busy)
-        self.cancel_button.setVisible(busy)
         self.cancel_button.setEnabled(busy)
+        self.cancel_button.setVisible(busy)
         self.cancel_button.setText("Cancelar")
+        self.run_hint.setVisible(busy)
         self.output_button.setEnabled(not busy)
         self.reset_output_button.setEnabled(not busy)
-        self.output_label.setEnabled(not busy)
-        # Projetos segue disponivel durante o processamento (revisar/postar).
-        self.settings_button.setEnabled(not busy)
-        self.summary_edit_button.setEnabled(not busy)
-        self.captions_checkbox.setEnabled(not busy)
-        self.quick_preset_combo.setEnabled(not busy)
-        self.quick_max_clips.setEnabled(not busy)
-        self.quick_min_score.setEnabled(not busy)
-        self.quick_whisper_combo.setEnabled(not busy)
-        self.quick_res_combo.setEnabled(not busy)
-        self.quick_layout_combo.setEnabled(not busy)
         self.video_link.setEnabled(not busy)
-        self.focus_input.setReadOnly(busy)
-        self.source_tabs.setEnabled(not busy)
-        self.process_button.setText(
-            "Processando..." if busy else "▶   Processar vídeo"
-        )
         if busy:
-            self._set_header_status("Processando...", "busy")
+            self._set_header_status("Processando…", "busy")
         else:
             self.worker = None
-            self._update_process_enabled()
+        self._update_process_enabled()
+
+    def _step_index(self, stage: str) -> int | None:
+        return next(
+            (i for i, (_, _, stages) in enumerate(PIPE_STEPS) if stage in stages), None
+        )
 
     def on_stage(self, stage: str):
         stage_text = STAGE_LABELS.get(stage, stage)
-        self.stage_label.setText(stage_text)
         if stage == "concluido":
             self._set_header_status("Concluído", "done")
-            for step in self.pipe_steps:
-                step.set_state("done")
+            self._finish_steps()
+            self.stage_label.setText("Concluído")
             return
-        self._set_header_status(stage_text, "busy")
-        active = next(
-            (i for i, (_, _, stages) in enumerate(PIPE_STEPS) if stage in stages),
-            None,
-        )
+        active = self._step_index(stage)
         if active is None:
+            self.stage_label.setText(stage_text)
+            self._set_header_status(stage_text, "busy")
             return
+        now = time.monotonic()
+        if active != self._active_step:
+            for index in range(len(self.pipe_steps)):
+                if index < active and self.pipe_steps[index].property("state") != "done":
+                    started = self._step_started.get(index)
+                    took = f"concluído · {_fmt_secs(now - started)}" if started else "concluído"
+                    self.pipe_steps[index].set_state("done", took)
+            self._step_started.setdefault(active, now)
+            self._active_step = active
+        status = "aguardando você" if stage == "revisao" else "em andamento"
+        self.pipe_steps[active].set_state("active", status)
+        for index in range(active + 1, len(self.pipe_steps)):
+            self.pipe_steps[index].set_state("idle")
+        self._stage_text = stage_text
+        self.stage_label.setText(f"Etapa {active + 1} de {len(PIPE_STEPS)} · {stage_text}")
+        pill = stage_text if stage == "revisao" else f"{stage_text} · {self.progress_bar.value()}%"
+        self._set_header_status(pill, "busy")
+
+    def _finish_steps(self):
+        now = time.monotonic()
         for index, step in enumerate(self.pipe_steps):
-            if index < active:
-                step.set_state("done")
-            elif index == active:
-                step.set_state("active")
-            else:
-                step.set_state("idle")
+            if step.property("state") != "done":
+                started = self._step_started.get(index)
+                took = f"concluído · {_fmt_secs(now - started)}" if started else "concluído"
+                step.set_state("done", took)
 
     def on_log(self, line: str):
         self.log_view.appendPlainText(line)
@@ -1287,8 +1608,21 @@ class MainWindow(QMainWindow):
             self.log_view.verticalScrollBar().maximum()
         )
 
+    def _notify_if_away(self, title: str, body: str, action_text: str):
+        away = self.main_stack.currentIndex() != 0 or not self.isActiveWindow()
+        if away:
+            self.toast.show_message(
+                title,
+                body,
+                icon="✓",
+                action_text=action_text,
+                action=lambda: self.workspace_button.setChecked(True),
+            )
+            QApplication.alert(self)
+
     def on_finished(self, result: dict):
         self.set_busy(False)
+        self._clock.stop()
         clips = result.get("clips", [])
         self.clip_paths = result.get("clip_paths", []) or []
         self.report_path = result.get("report_path")
@@ -1299,225 +1633,130 @@ class MainWindow(QMainWindow):
                 f"{clip.get('category', '')} ({clip.get('viral_score')}) "
                 f"{clip.get('title', '')}"
             )
-            justification = clip.get("justification") or clip.get(
-                "analysis", ""
-            )
+            justification = clip.get("justification") or clip.get("analysis", "")
             self.log_view.appendPlainText(f"  Justificativa: {justification}")
-        self.log_view.appendPlainText(
-            f"\nClipes salvos: {len(self.clip_paths)}"
-        )
+        self.log_view.appendPlainText(f"\nClipes salvos: {len(self.clip_paths)}")
 
         self.progress_bar.setValue(100)
-        for step in self.pipe_steps:
-            step.set_state("done")
+        self._finish_steps()
         self.stage_label.setText("Concluído")
-        self._set_header_status("Concluído", "done")
+        n = len(clips)
+        self._set_header_status(
+            f"Concluído · {_plural(n, 'corte', 'cortes')}", "done"
+        )
+        self._run_started = 0.0
         self._render_results(clips, self.clip_paths, self.report_path)
-        self.output_tabs.set_current(0)
-        has_output = bool(self.clip_paths or self.report_path)
+        self.log_box.set_expanded(False)
+        self._show_page(PAGE_RESULTS)
         self.report_button.setEnabled(bool(self.report_path))
-        self.open_folder_button.setEnabled(has_output)
+        self.open_folder_button.setEnabled(bool(self.clip_paths or self.report_path))
         if not clips:
             self.log_view.appendPlainText(
-                "Nenhum corte atingiu a nota mínima. Reduza 'Nota mín.' ou o "
-                "direcionamento da IA e processe de novo (a transcrição fica em cache)."
+                "Nenhum corte atingiu a nota mínima. Tente 'Rigor da IA: Mais cortes' "
+                "ou mude a instrução para a IA e gere de novo (a transcrição fica em cache)."
             )
+        self._notify_if_away(
+            "Cortes prontos" if n else "Processamento concluído",
+            f"{_plural(n, 'corte gerado', 'cortes gerados')}.",
+            "Ver cortes",
+        )
+
+    def _on_review_requested(self, clips):
+        from PySide6.QtWidgets import QDialog
+
+        from gui.review_dialog import ClipReviewDialog
+
+        self.workspace_button.setChecked(True)
+        QApplication.alert(self)
+        dialog = ClipReviewDialog(list(clips or []), self)
+        if dialog.exec() == QDialog.Accepted:
+            self.controller.submit_review(dialog.selected_clips())
+        else:
+            self.controller.submit_review([])
 
     def on_cancelled(self, message: str):
         self.set_busy(False)
+        self._clock.stop()
+        self._run_started = 0.0
+        self.eta_label.setText("")
         self.stage_label.setText("Cancelado")
         self._set_header_status("Cancelado", "idle")
         for step in self.pipe_steps:
             if step.property("state") == "active":
-                step.set_state("idle")
+                step.set_state("idle", "cancelado")
         self.log_view.appendPlainText(f"[CANCELADO] {message}")
+        self.config_banner.setText(
+            "Processamento cancelado. Ajuste o que quiser e clique em “Gerar cortes” para tentar de novo."
+        )
+        self.config_banner.setVisible(True)
+        self._show_page(PAGE_CONFIG)
 
     def on_failed(self, error: str):
         self.set_busy(False)
-        self.stage_label.setText("Erro")
+        self._clock.stop()
+        self._run_started = 0.0
+        self.eta_label.setText("")
+        if 0 <= self._active_step < len(PIPE_STEPS):
+            self.stage_label.setText(
+                f"Parou na etapa {self._active_step + 1} de {len(PIPE_STEPS)} · "
+                f"{PIPE_STEPS[self._active_step][0]}"
+            )
+        else:
+            self.stage_label.setText("Erro")
         self._set_header_status("Erro", "error")
         for step in self.pipe_steps:
             if step.property("state") == "active":
                 step.set_state("error")
         self.log_view.appendPlainText(f"[ERRO] {error}")
-        QMessageBox.critical(self, "Não foi possível concluir", friendly_error(error))
+        self.error_text.setText(friendly_error(error))
+        self.error_banner.setVisible(True)
+        self.log_box.set_expanded(True)
+        self._show_page(PAGE_RUN)
+        self.cancel_button.setVisible(False)
+        self._notify_if_away("Não foi possível concluir", "Veja o motivo na tela Cortar.", "Ver")
+
+    def start_new_video(self):
+        self.clear_video()
+        self.video_link.clear()
+        self.config_banner.setVisible(False)
+        self._set_header_status("Pronto", "idle")
+        self._show_page(PAGE_CONFIG)
+        self.video_link.setFocus()
 
     # ------------------------------------------------------------------
-    # Mostragem dos Cortes Gerados
+    # Cortes gerados
     # ------------------------------------------------------------------
-    def _clear_results_grid(self):
-        while self.results_grid.count():
-            item = self.results_grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
     def _render_results(self, clips, paths, report_path):
-        self._clear_results_grid()
-        self.results_section.setVisible(True)
+        self.results_grid.clear()
+        self.last_clips = list(clips)
         total = len(clips)
-        self.result_count.setText(
-            f"{total} corte" if total == 1 else f"{total} cortes"
+        self.results_title.setText(
+            f"{total} corte pronto" if total == 1 else f"{total} cortes prontos"
         )
-        self.result_path.setText(
-            str(report_path or self._result_folder() or "—")
-        )
-
-        if not clips:
-            empty = label(
-                "Nenhum corte atingiu os critérios configurados. Confira o log de execução ou reduza a nota mínima.",
-                "ResultsEmpty",
-                wrap=True,
-            )
-            empty.setAlignment(Qt.AlignCenter)
-            self.results_grid.addWidget(empty, 0, 0)
-            return
-
+        self.result_path.setText(str(self._result_folder() or report_path or "—"))
+        self.results_empty.setVisible(not clips)
+        self.results_grid.setVisible(bool(clips))
         for idx, clip in enumerate(clips):
             path = paths[idx] if idx < len(paths) else str(clip.get("file") or "")
-            card = self._build_result_card(clip, path, clip_index=idx)
-            self.results_grid.addWidget(card, idx, 0)
+            card = ClipCard(clip, path, idx, thumb_requester=self.request_clip_thumb)
+            card.posted.connect(self._on_clip_posted)
+            card.published_changed.connect(self._on_result_published_changed)
+            self.results_grid.add(card)
 
-        self.results_grid.setRowStretch(len(clips), 1)
-
-    def _build_result_card(
-        self, clip: dict, path: str, clip_index: int = 0
-    ) -> QWidget:
-        card = QFrame()
-        card.setObjectName("ResultCard")
-        row = QHBoxLayout(card)
-        row.setContentsMargins(14, 12, 14, 12)
-        row.setSpacing(14)
-
-        media = QPushButton(f"▶\n#{clip_index + 1}")
-        media.setObjectName("ResultMedia")
-        media.setFixedSize(68, 116)
-        media.setCursor(Qt.PointingHandCursor)
-        if path and Path(path).is_file():
-            self.request_clip_thumb(media, str(path), f"#{clip_index + 1}")
-        if path:
-            media.setToolTip(f"Assistir {path}")
-            media.clicked.connect(
-                lambda _=False, p=path: QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(str(p))
-                )
-            )
-        else:
-            media.setEnabled(False)
-        row.addWidget(media, 0, Qt.AlignTop)
-
-        body = QVBoxLayout()
-        body.setSpacing(5)
-
-        kicker = QHBoxLayout()
-        kicker.setSpacing(6)
-        score_val = clip.get("viral_score", "—")
-        score_lbl = label(f"Nota {score_val}/10", "ClipScore")
-        try:
-            if float(score_val) < 8.0:
-                score_lbl.setProperty("tier", "mid")
-        except (TypeError, ValueError):
-            pass
-        kicker.addWidget(score_lbl)
-        kicker.addWidget(label(str(clip.get("category") or "CORTE"), "ClipCat"))
-        if clip.get("layout") and clip.get("layout") != "center":
-            kicker.addWidget(label(get_layout(clip["layout"]).name, "ClipCat"))
-        kicker.addStretch(1)
-        kicker.addWidget(
-            label(
-                format_clip_interval(
-                    clip.get("start", "—"), clip.get("end", "—")
-                ),
-                "ClipTime",
-            )
+    def _on_clip_posted(self, path: str, index: int):
+        body = (
+            f"O arquivo do corte #{index + 1} está selecionado na pasta — é só arrastar "
+            "para a página de envio. Depois de postar, clique em “Marcar como publicado”."
+            if path and Path(path).is_file()
+            else "O arquivo deste corte não foi encontrado; envie manualmente."
         )
-        body.addLayout(kicker)
-
-        body.addWidget(
-            label(
-                clip.get("title") or f"Corte #{clip_index + 1}",
-                "ClipTitle",
-                wrap=True,
-            )
+        self.toast.show_message(
+            "Abrimos o YouTube Studio e o TikTok Studio no navegador.", body, icon="↗"
         )
 
-        hook_text = clip.get("hook_text")
-        if hook_text:
-            body.addWidget(label(f"“{hook_text}”", "ClipHook", wrap=True))
-
-        analysis = clip.get("analysis") or clip.get("justification")
-        if analysis:
-            body.addWidget(label(str(analysis), "ClipAnalysis", wrap=True))
-
-        body.addStretch(1)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(6)
-        if path:
-            open_btn = QPushButton("▶ Assistir MP4")
-            open_btn.setObjectName("Ghost")
-            open_btn.setCursor(Qt.PointingHandCursor)
-            open_btn.clicked.connect(
-                lambda _=False, p=path: QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(str(p))
-                )
-            )
-            actions.addWidget(open_btn)
-
-            copy_btn = QPushButton("Copiar caminho")
-            copy_btn.setObjectName("Ghost")
-            copy_btn.setCursor(Qt.PointingHandCursor)
-            copy_btn.clicked.connect(
-                lambda _=False, p=path, b=copy_btn: (
-                    QApplication.clipboard().setText(str(p)),
-                    flash_button(b, "✓ Copiado"),
-                )
-            )
-            actions.addWidget(copy_btn)
-
-        target_path = path or (
-            str(self._result_folder()) if self._result_folder() else ""
-        )
-        post_btn = QPushButton("Postar")
-        post_btn.setObjectName("Ghost")
-        post_btn.setCursor(Qt.PointingHandCursor)
-        post_btn.setToolTip(
-            "Abre YouTube e TikTok Studio no navegador, copia o caminho e abre a pasta do corte para arrastar"
-        )
-        post_btn.clicked.connect(
-            lambda _=False, p=target_path: open_upload_pages(p)
-        )
-        actions.addWidget(post_btn)
-
-        pub_btn = QPushButton()
-        pub_btn.setObjectName("PublishedBtn")
-        pub_btn.setCheckable(True)
-        pub_btn.setCursor(Qt.PointingHandCursor)
-        update_published_button_ui(pub_btn, bool(clip.get("published", False)))
-        pub_btn.clicked.connect(
-            lambda checked, idx=clip_index, b=pub_btn: self._toggle_result_clip_published(
-                idx, checked, b
-            )
-        )
-        actions.addWidget(pub_btn)
-
-        actions.addStretch(1)
-        if path:
-            # Nome do arquivo em linha propria e elidido: nunca alarga o card.
-            fname = ElidedLabel(Path(path).name, "ClipPath")
-            fname.setToolTip(str(path))
-            body.addWidget(fname)
-        body.addLayout(actions)
-
-        row.addLayout(body, 1)
-        return card
-
-    def _toggle_result_clip_published(
-        self, clip_index: int, published: bool, button: QPushButton
-    ) -> None:
+    def _on_result_published_changed(self, index: int, published: bool):
         if self.report_path and Path(self.report_path).exists():
-            update_clip_published(self.report_path, clip_index, published)
-        update_published_button_ui(button, published)
+            update_clip_published(self.report_path, index, published)
 
     def _result_folder(self):
         for path in self.clip_paths:

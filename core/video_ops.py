@@ -12,10 +12,11 @@ from core.config import OUTPUT_DIR
 from core.exceptions import (
     PipelineCancelledError,
     check_cancelled,
+    run_cmd,
     run_interruptible_cmd,
 )
 from core.options import ProcessingOptions
-from utils.timefmt import clamp_seconds, hhmmss_to_seconds
+from utils.timefmt import clamp_seconds, hhmmss_to_seconds, seconds_to_hhmmss
 
 
 def _require_ffmpeg() -> str:
@@ -48,7 +49,7 @@ def get_duration(video_path: str) -> float:
         "default=noprint_wrappers=1:nokey=1",
         str(video_path),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    result = run_cmd(cmd, timeout=30)
     if result.returncode != 0:
         raise RuntimeError(f"Falha ao obter duracao: {result.stderr}")
     return float(result.stdout.strip())
@@ -69,7 +70,7 @@ def cut_clip(
     end: str,
     total_duration: float,
     out_path: str,
-    padding_s: float = 5.0,
+    padding_s: float = 0.3,
     cancel_event: Event | None = None,
 ) -> str:
     check_cancelled(cancel_event)
@@ -105,26 +106,9 @@ def cut_clip(
 
 
 def _write_clip_captions(words, options: ProcessingOptions, tmp_dir: str) -> str:
-    """Grava o .ass no diretorio temporario e copia a fonte para o libass achar."""
+    """Grava o .ass no diretorio temporario (fontes sao copiadas em `render_clip`)."""
     ass_path = os.path.join(tmp_dir, "captions.ass")
     captions.write_ass(words, ass_path, options, options.width, options.height)
-
-    from core.captions.fonts import bundled_font_files
-
-    font_files = set(bundled_font_files())
-    font_file = captions.find_font_path(options.caption_font, options.caption_bold)
-    if font_file:
-        font_files.add(font_file)
-    italic = captions.find_font_path(
-        options.caption_font, options.caption_bold, True
-    ) if getattr(options, "caption_italic", False) else None
-    if italic:
-        font_files.add(italic)
-    for path in font_files:
-        try:
-            shutil.copy2(path, tmp_dir)
-        except OSError:
-            pass
     return ass_path
 
 
@@ -148,7 +132,8 @@ def _transcribe_clip_words(
         options.language,
         options.whisper_compute_type,
     )
-    path = cache.clip_transcript_path(cache_dir, index)
+    win_tag = cache.window_hash(video_path, cut_start, cut_end)
+    path = cache.clip_transcript_path(cache_dir, win_tag)
 
     segments = cache.load_transcript_file(path, key)
     if segments is None:
@@ -216,6 +201,7 @@ def _process_vertical(
     segments,
     index,
     cancel_event: Event | None = None,
+    warn_callback=None,
 ):
     check_cancelled(cancel_event)
     cut_start, cut_end = _cut_window(
@@ -230,30 +216,9 @@ def _process_vertical(
         if layout.has_text
         else ""
     )
-    plan = None
-    if layout.needs_vision:
-        speech_words = (
-            captions.words_in_window(segments, cut_start, cut_end) if segments else []
-        )
-        plan = framing.analyze_clip(
-            video_path,
-            cut_start,
-            cut_end,
-            words=speech_words,
-            want_cam=any(s.kind in ("cam", "content") for s in layout.slots),
-            dynamic=layout.dynamic,
-            cache_path=Path(out_path).parent / ".cache" / f"framing_{index:03d}.json",
-            cache_key={
-                "video": cache.video_hash(video_path),
-                "window": [round(cut_start, 3), round(cut_end, 3)],
-                "layout": layout.id,
-            },
-        )
-    check_cancelled(cancel_event)
-    extra = {"plan": plan, "band_text": band_text}
-
-    if options.captions_enabled:
-        words = _clip_words(
+    need_words = bool(options.captions_enabled or layout.dynamic)
+    words = (
+        _clip_words(
             video_path,
             cut_start,
             cut_end,
@@ -263,22 +228,70 @@ def _process_vertical(
             segments,
             cancel_event=cancel_event,
         )
-        if words:
-            with tempfile.TemporaryDirectory(prefix="autocut_caps_") as tmp_dir:
-                # Tamanho e posicao da legenda dependem do formato escolhido.
-                ass_path = _write_clip_captions(
-                    words, layouts.caption_options(options), tmp_dir
-                )
-                return render.render_clip(
-                    video_path,
-                    cut_start,
-                    cut_end,
-                    out_path,
-                    options=options,
-                    ass_path=ass_path,
-                    cancel_event=cancel_event,
-                    **extra,
-                )
+        if need_words
+        else []
+    )
+    if not words and layout.dynamic and options.caption_transcribe_mode != "clip":
+        words = _transcribe_clip_words(
+            video_path,
+            cut_start,
+            cut_end,
+            Path(out_path).parent,
+            index,
+            options=options,
+            cancel_event=cancel_event,
+        )
+
+    plan = None
+    if layout.needs_vision:
+        speech_words = (
+            words
+            if words
+            else (
+                captions.words_in_window(segments, cut_start, cut_end)
+                if segments
+                else []
+            )
+        )
+        win_tag = cache.window_hash(video_path, cut_start, cut_end)
+        plan = framing.analyze_clip(
+            video_path,
+            cut_start,
+            cut_end,
+            words=speech_words,
+            want_cam=any(s.kind in ("cam", "content") for s in layout.slots),
+            dynamic=layout.dynamic,
+            cache_path=cache.framing_cache_path(
+                Path(out_path).parent / ".cache", win_tag
+            ),
+            cache_key={
+                "video": cache.video_hash(video_path),
+                "window": [round(cut_start, 3), round(cut_end, 3)],
+                "layout": layout.id,
+                "has_words": bool(speech_words),
+            },
+        )
+    check_cancelled(cancel_event)
+    extra = {"plan": plan, "band_text": band_text}
+    if warn_callback is not None:
+        extra["warn_callback"] = warn_callback
+
+    if options.captions_enabled and words:
+        with tempfile.TemporaryDirectory(prefix="autocut_caps_") as tmp_dir:
+            # Tamanho e posicao da legenda dependem do formato escolhido.
+            ass_path = _write_clip_captions(
+                words, layouts.caption_options(options), tmp_dir
+            )
+            return render.render_clip(
+                video_path,
+                cut_start,
+                cut_end,
+                out_path,
+                options=options,
+                ass_path=ass_path,
+                cancel_event=cancel_event,
+                **extra,
+            )
 
     return render.render_clip(
         video_path,
@@ -356,6 +369,12 @@ def cut_all(
     jobs = []
     used_names: set[str] = set()
     for idx, clip in enumerate(clips, start=1):
+        cut_start, cut_end = _cut_window(
+            clip["start"], clip["end"], total_duration, options.padding_s
+        )
+        clip["cut_start"] = seconds_to_hhmmss(cut_start)
+        clip["cut_end"] = seconds_to_hhmmss(cut_end)
+        clip["cut_duration_s"] = round(max(0.0, cut_end - cut_start), 2)
         category = clip.get("category", "CORTE")
         fallback = f"clip_{idx:03d}_{category}"
         base_name = _safe_filename(clip.get("title"), fallback)
@@ -371,6 +390,10 @@ def cut_all(
     if not jobs:
         return []
 
+    def _warn(msg: str) -> None:
+        if progress_callback:
+            progress_callback("clipes", 70, msg)
+
     max_workers = options.max_workers if vertical else None
     executor = ThreadPoolExecutor(max_workers=max_workers)
     try:
@@ -385,6 +408,7 @@ def cut_all(
                 segments,
                 idx,
                 cancel_event,
+                **({"warn_callback": _warn} if vertical else {}),
             ): out_path
             for idx, clip, out_path in jobs
         }

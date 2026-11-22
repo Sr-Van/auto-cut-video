@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QFileDialog,
     QMessageBox,
@@ -48,7 +49,7 @@ from gui.widgets import (
     PhonePreviewWidget,
     PresetGrid,
     Switch,
-    UnderlineTabs,
+    SideNav,
     label,
     separator,
 )
@@ -131,8 +132,11 @@ def _field_box(title: str, control: QWidget, hint: str = "") -> QWidget:
     head.setContentsMargins(0, 0, 0, 0)
     head.addWidget(label(title, "FieldLabel"))
     head.addStretch(1)
+    hint_lbl = None
     if hint:
-        head.addWidget(label(hint, "FieldHint"))
+        hint_lbl = label(hint, "FieldHint")
+        head.addWidget(hint_lbl)
+    holder.hint_label = hint_lbl
     layout.addLayout(head)
     layout.addWidget(control)
     return holder
@@ -142,6 +146,7 @@ class SettingsDialog(QDialog):
     """Configurações completas de Vídeo, Legenda e Cortes/IA."""
 
     options_changed = Signal(object)
+    api_keys_changed = Signal()
 
     def __init__(
         self,
@@ -182,20 +187,34 @@ class SettingsDialog(QDialog):
             head_layout.addWidget(sub)
             root.addWidget(head)
 
-        # --- Sub-abas (Vídeo | Legenda | Cortes & IA)
+        # --- Navegação vertical por intenção (mesma ordem da tela Cortar)
         self._layout_id = options.layout_id
-        self.tabs = UnderlineTabs(["Vídeo", "Legenda", "Cortes & IA", "Formato"])
-        root.addWidget(self.tabs)
+        self.tabs = SideNav(
+            [
+                ("Formato", None),
+                ("Legenda", None),
+                ("Cortes", None),
+                ("Contas e IA", None),
+                None,
+                ("Avançado", "vídeo, Whisper"),
+            ]
+        )
 
         # --- Corpo rolável
         self.stack = QStackedWidget()
-        self.stack.addWidget(self._wrap_scroll(self._build_video_tab()))
+        self.stack.addWidget(self._build_format_tab())                         # 0
         # A aba Legenda tem rolagem propria: a previa 9:16 fica fixa ao lado.
-        self.stack.addWidget(self._build_caption_tab())
-        self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))
-        self.stack.addWidget(self._build_format_tab())
+        self.stack.addWidget(self._build_caption_tab())                        # 1
+        self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))        # 2
+        self.stack.addWidget(self._wrap_scroll(self._build_ai_tab()))          # 3
+        self.stack.addWidget(self._wrap_scroll(self._build_advanced_tab()))    # 4
         self.tabs.changed.connect(self.stack.setCurrentIndex)
-        root.addWidget(self.stack, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self.tabs)
+        body.addWidget(self.stack, 1)
+        root.addLayout(body, 1)
 
         # --- Rodapé
         foot = QFrame()
@@ -236,6 +255,8 @@ class SettingsDialog(QDialog):
         self._connect_live_preview()
         self._refresh_preview()
 
+    PAGE_FORMAT, PAGE_CAPTION, PAGE_CUTS, PAGE_AI, PAGE_ADVANCED = range(5)
+
     def set_active_tab(self, index: int):
         self.tabs.set_current(index)
         self.stack.setCurrentIndex(index)
@@ -261,7 +282,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(label("ENQUADRAMENTO VERTICAL", "SectionTitle"))
+        layout.addWidget(label("Enquadramento vertical", "SectionTitle"))
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
@@ -298,7 +319,7 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(grid1)
         layout.addWidget(separator())
-        layout.addWidget(label("CODIFICAÇÃO DE VÍDEO", "SectionTitle"))
+        layout.addWidget(label("Codificação de vídeo", "SectionTitle"))
 
         grid2 = QGridLayout()
         grid2.setHorizontalSpacing(14)
@@ -323,6 +344,9 @@ class SettingsDialog(QDialog):
         grid2.addWidget(_field_box("Encoder H.264", self.encoder), 0, 2)
 
         layout.addLayout(grid2)
+
+        self.audio_normalize = Switch("Normalizar volume (-14 LUFS)")
+        layout.addWidget(self.audio_normalize)
 
         note = label(
             "O modo 'auto' utiliza aceleração por placa de vídeo (NVENC/QSV/AMF) quando disponível "
@@ -350,7 +374,7 @@ class SettingsDialog(QDialog):
 
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
-        self.captions_enabled_toggle = Switch("Gerar legendas dinâmicas")
+        self.captions_enabled_toggle = Switch("Usar legendas")
         top_bar.addWidget(self.captions_enabled_toggle)
         top_bar.addStretch(1)
         self.preset_status_badge = label("Preset: TikTok Studio", "MiniPill")
@@ -358,7 +382,7 @@ class SettingsDialog(QDialog):
         left.addLayout(top_bar)
 
         left.addWidget(separator())
-        left.addWidget(label("ESTILOS PRONTOS (PRESETS)", "SectionTitle"))
+        left.addWidget(label("Estilos prontos", "SectionTitle"))
 
         self.preset_grid = PresetGrid(VIRAL_PRESETS, columns=3, parent=pane)
         self.preset_grid.preset_selected.connect(self._on_preset_card_selected)
@@ -376,10 +400,6 @@ class SettingsDialog(QDialog):
         grid = QGridLayout()
         grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(10)
-
-        self.caption_preset = QComboBox()
-        self.caption_preset.addItems(list(PRESETS.keys()))
-        self.caption_preset.setVisible(False)
 
         self.caption_font = FontComboBox()
         self._populate_font_combo()
@@ -471,8 +491,10 @@ class SettingsDialog(QDialog):
         self.caption_margin_bottom = QSpinBox()
         self.caption_margin_bottom.setRange(0, 1200)
         self.caption_margin_bottom.setSingleStep(10)
+        margin_box = _field_box("Margem inferior", self.caption_margin_bottom, "px")
+        self.caption_margin_hint = margin_box.hint_label
         grid.addWidget(
-            _field_box("Margem inferior", self.caption_margin_bottom, "px"),
+            margin_box,
             6,
             0,
         )
@@ -583,7 +605,7 @@ class SettingsDialog(QDialog):
         preview_layout = QVBoxLayout(preview_box)
         preview_layout.setContentsMargins(12, 12, 12, 12)
         preview_layout.setSpacing(8)
-        preview_layout.addWidget(label("PRÉVIA 9:16", "SectionTitle"))
+        preview_layout.addWidget(label("Prévia 9:16", "SectionTitle"))
         self.preview_widget = PhonePreviewWidget(
             phone_width=156, in_settings=True
         )
@@ -606,7 +628,7 @@ class SettingsDialog(QDialog):
         col.setContentsMargins(0, 0, 8, 0)
         col.setSpacing(12)
 
-        col.addWidget(label("FORMATO DO SHORT", "SectionTitle"))
+        col.addWidget(label("Formato do short", "SectionTitle"))
         col.addWidget(
             label(
                 "Escolha uma vez: todos os próximos cortes saem neste formato.",
@@ -618,7 +640,7 @@ class SettingsDialog(QDialog):
         self.layout_grid.layout_selected.connect(self._on_layout_selected)
         col.addWidget(self.layout_grid)
 
-        col.addWidget(label("ITENS AUXILIARES", "SectionTitle"))
+        col.addWidget(label("Itens auxiliares", "SectionTitle"))
 
         # --- Texto da faixa (so formatos com texto)
         self.text_box = QWidget()
@@ -712,7 +734,7 @@ class SettingsDialog(QDialog):
         pv = QVBoxLayout(preview_box)
         pv.setContentsMargins(12, 12, 12, 12)
         pv.setSpacing(8)
-        pv.addWidget(label("PRÉVIA 9:16", "SectionTitle"))
+        pv.addWidget(label("Prévia 9:16", "SectionTitle"))
         self.format_preview = PhonePreviewWidget(phone_width=156, in_settings=True)
         pv.addWidget(self.format_preview, 0, Qt.AlignHCenter)
         outer.addWidget(preview_box, 0, Qt.AlignTop)
@@ -741,6 +763,21 @@ class SettingsDialog(QDialog):
         self.layout_custom_text.setEnabled(
             self.layout_text_source.currentData() == "custom"
         )
+        single_slot = len(layout.slots) == 1
+        if hasattr(self, "caption_margin_bottom"):
+            self.caption_margin_bottom.setEnabled(single_slot)
+            if single_slot:
+                self.caption_margin_bottom.setToolTip(
+                    "Distância da legenda até a borda inferior (em px para 1080×1920)."
+                )
+            else:
+                self.caption_margin_bottom.setToolTip(
+                    f"No formato '{layout.name}', a legenda fica ancorada dentro do slot dedicado."
+                )
+        if getattr(self, "caption_margin_hint", None) is not None:
+            self.caption_margin_hint.setText(
+                "px" if single_slot else "Fixo pelo formato"
+            )
 
     def _set_aux_path(self, field: QLineEdit, path: str):
         field.setText(path)
@@ -766,14 +803,24 @@ class SettingsDialog(QDialog):
             if widget is not None:
                 widget.set_frame(image)
 
-    def _build_cuts_tab(self) -> QWidget:
+    def _page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
         pane = QWidget()
         pane.setObjectName("Root")
         layout = QVBoxLayout(pane)
-        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setContentsMargins(28, 22, 28, 22)
         layout.setSpacing(14)
+        layout.addWidget(label(title, "PageTitle"))
+        if subtitle:
+            layout.addWidget(label(subtitle, "Faint", wrap=True))
+        layout.addWidget(separator())
+        return pane, layout
 
-        layout.addWidget(label("CRITÉRIOS DE SELEÇÃO E IA", "SectionTitle"))
+    def _build_cuts_tab(self) -> QWidget:
+        pane, layout = self._page(
+            "Cortes",
+            "Quantos cortes gerar, de que tamanho e com que rigor. "
+            "Estes valores também aparecem na tela Cortar.",
+        )
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
@@ -782,16 +829,130 @@ class SettingsDialog(QDialog):
         self.max_clips = QSpinBox()
         self.max_clips.setRange(1, 50)
         grid1.addWidget(
-            _field_box("Máximo de clipes", self.max_clips, "1 – 50"), 0, 0
+            _field_box("Quantidade de cortes", self.max_clips, "máximo por vídeo · 1 – 50"), 0, 0
         )
 
         self.min_viral_score = QSpinBox()
         self.min_viral_score.setRange(1, 10)
         grid1.addWidget(
-            _field_box("Nota mínima viral", self.min_viral_score, "1 – 10"),
+            _field_box(
+                "Rigor da IA (nota mínima)",
+                self.min_viral_score,
+                "1 – 10 · padrão 8",
+            ),
             0,
             1,
         )
+
+        self.min_clip_duration = QSpinBox()
+        self.min_clip_duration.setRange(10, 180)
+        self.min_clip_duration.setSingleStep(5)
+        self.min_clip_duration.setSuffix(" s")
+        self.min_clip_duration.valueChanged.connect(
+            self._on_min_duration_changed
+        )
+        grid1.addWidget(
+            _field_box("Duração mínima do corte", self.min_clip_duration, "10 – 180s"),
+            1,
+            0,
+        )
+
+        self.max_clip_duration = QSpinBox()
+        self.max_clip_duration.setRange(15, 300)
+        self.max_clip_duration.setSingleStep(5)
+        self.max_clip_duration.setSuffix(" s")
+        self.max_clip_duration.valueChanged.connect(
+            self._on_max_duration_changed
+        )
+        grid1.addWidget(
+            _field_box("Duração máxima do corte", self.max_clip_duration, "15 – 300s"),
+            1,
+            1,
+        )
+        layout.addLayout(grid1)
+
+        self.review_before_render = Switch("Revisar cortes antes de renderizar")
+        self.review_before_render.setToolTip(
+            "Pausa após a análise de IA para você aprovar cortes e ajustar início/fim antes de renderizar"
+        )
+        layout.addWidget(self.review_before_render)
+
+        note = label(
+            "A IA seleciona trechos independentes que atinjam a nota mínima, até a quantidade escolhida. "
+            "Os cortes são ajustados automaticamente em pausas naturais da fala.",
+            "Note",
+            wrap=True,
+        )
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return pane
+
+    def _build_ai_tab(self) -> QWidget:
+        pane, layout = self._page(
+            "Contas e IA",
+            "Qual modelo de IA escolhe os cortes e as chaves de acesso dos provedores.",
+        )
+
+        self.ai_model = AIModelPicker()
+        layout.addWidget(
+            _field_box(
+                "Modelo de IA",
+                self.ai_model,
+                "“Automático” alterna entre provedores e chaves quando um falha (recomendado)",
+            )
+        )
+        layout.addWidget(separator())
+        layout.addWidget(label("Chaves de API (.env)", "SectionTitle"))
+
+        self.api_keys_list = QListWidget()
+        self.api_keys_list.setMaximumHeight(120)
+        self.api_keys_list.setToolTip("Chaves de API configuradas localmente no arquivo .env")
+        layout.addWidget(self.api_keys_list)
+
+        key_row = QHBoxLayout()
+        key_row.setSpacing(8)
+        self.api_key_input = QLineEdit()
+        self.api_key_input.setEchoMode(QLineEdit.Password)
+        self.api_key_input.setPlaceholderText(
+            "Cole uma chave (AIza..., gsk_..., sk-or-..., csk-...) ou provedor:chave"
+        )
+        key_row.addWidget(self.api_key_input, 1)
+
+        self.add_api_key_btn = QPushButton("Adicionar")
+        self.add_api_key_btn.setProperty("variant", "secondary")
+        self.add_api_key_btn.setCursor(Qt.PointingHandCursor)
+        self.add_api_key_btn.clicked.connect(self._on_add_api_key)
+        key_row.addWidget(self.add_api_key_btn)
+
+        self.test_api_key_btn = QPushButton("Testar")
+        self.test_api_key_btn.setProperty("variant", "ghost")
+        self.test_api_key_btn.setCursor(Qt.PointingHandCursor)
+        self.test_api_key_btn.clicked.connect(self._on_test_api_key)
+        key_row.addWidget(self.test_api_key_btn)
+
+        self.remove_api_key_btn = QPushButton("Remover")
+        self.remove_api_key_btn.setProperty("variant", "ghost")
+        self.remove_api_key_btn.setCursor(Qt.PointingHandCursor)
+        self.remove_api_key_btn.clicked.connect(self._on_remove_api_key)
+        key_row.addWidget(self.remove_api_key_btn)
+        layout.addLayout(key_row)
+
+        self.api_key_status = label("", "Muted", wrap=True)
+        layout.addWidget(self.api_key_status)
+        self._refresh_api_keys_list()
+        layout.addStretch(1)
+        return pane
+
+    def _build_advanced_tab(self) -> QWidget:
+        pane, layout = self._page(
+            "Avançado",
+            "Ajustes técnicos de transcrição, recorte e vídeo. Os padrões funcionam bem na maioria dos casos.",
+        )
+        layout.addWidget(label("Transcrição e recorte", "SectionTitle"))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(12)
 
         self.whisper_model = QComboBox()
         for w_label, w_val in (
@@ -803,70 +964,25 @@ class SettingsDialog(QDialog):
             ("tiny · ultra rápido", "tiny"),
         ):
             self.whisper_model.addItem(w_label, w_val)
-        grid1.addWidget(
-            _field_box("Modelo Whisper", self.whisper_model), 0, 2
-        )
-
-        self.ai_model = AIModelPicker()
-        grid1.addWidget(
-            _field_box(
-                "Modelo de IA",
-                self.ai_model,
-                "tentado primeiro; os outros ficam de reserva",
-            ),
-            1,
-            0,
-            1,
-            3,
-        )
-
-        layout.addLayout(grid1)
-        layout.addWidget(separator())
-        layout.addWidget(label("DURAÇÃO E RECORTE", "SectionTitle"))
-
-        grid2 = QGridLayout()
-        grid2.setHorizontalSpacing(14)
-        grid2.setVerticalSpacing(12)
-
-        self.min_clip_duration = QSpinBox()
-        self.min_clip_duration.setRange(10, 180)
-        self.min_clip_duration.setSingleStep(5)
-        self.min_clip_duration.valueChanged.connect(
-            self._on_min_duration_changed
-        )
-        grid2.addWidget(
-            _field_box("Duração mínima", self.min_clip_duration, "10 – 180s"),
-            0,
-            0,
-        )
-
-        self.max_clip_duration = QSpinBox()
-        self.max_clip_duration.setRange(15, 300)
-        self.max_clip_duration.setSingleStep(5)
-        self.max_clip_duration.valueChanged.connect(
-            self._on_max_duration_changed
-        )
-        grid2.addWidget(
-            _field_box("Duração máxima", self.max_clip_duration, "15 – 300s"),
-            0,
-            1,
+        grid.addWidget(
+            _field_box("Modelo de transcrição (Whisper)", self.whisper_model), 0, 0
         )
 
         self.pause_gap = QDoubleSpinBox()
         self.pause_gap.setRange(0.2, 10.0)
         self.pause_gap.setSingleStep(0.1)
         self.pause_gap.setDecimals(1)
-        grid2.addWidget(
+        grid.addWidget(
             _field_box("Pausa natural para corte", self.pause_gap, "0.2 – 10s"),
             0,
-            2,
+            1,
         )
 
         self.padding_s = QDoubleSpinBox()
         self.padding_s.setRange(0.0, 30.0)
         self.padding_s.setSingleStep(0.5)
         self.padding_s.setDecimals(1)
-        grid2.addWidget(
+        grid.addWidget(
             _field_box("Margem de segurança (padding)", self.padding_s, "0 – 30s"),
             1,
             0,
@@ -874,23 +990,100 @@ class SettingsDialog(QDialog):
 
         self.max_workers = QSpinBox()
         self.max_workers.setRange(1, 8)
-        grid2.addWidget(
-            _field_box("Workers de renderização", self.max_workers, "1 – 8"),
+        grid.addWidget(
+            _field_box("Renderizações em paralelo", self.max_workers, "1 – 8"),
             1,
             1,
         )
+        layout.addLayout(grid)
+        layout.addWidget(separator())
 
-        layout.addLayout(grid2)
-
-        note = label(
-            "A IA seleciona trechos independentes que atinjam a nota mínima até o limite configurado. "
-            "Os cortes são ajustados automaticamente em pausas naturais da fala.",
-            "Note",
-            wrap=True,
-        )
-        layout.addWidget(note)
+        video = self._build_video_tab()
+        video.layout().setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(video)
         layout.addStretch(1)
         return pane
+
+    def _refresh_api_keys_list(self) -> None:
+        from core import config as core_config
+
+        self.api_keys_list.clear()
+        for raw_key in core_config.API_KEYS:
+            self.api_keys_list.addItem(core_config.mask_api_key(raw_key))
+        has_keys = bool(core_config.API_KEYS)
+        self.remove_api_key_btn.setEnabled(has_keys)
+        if not has_keys:
+            self.api_key_status.setText("Nenhuma chave configurada. Adicione uma acima para usar a IA.")
+
+    def _on_add_api_key(self) -> None:
+        from core import config as core_config
+
+        raw = self.api_key_input.text().strip()
+        if not raw:
+            self.api_key_status.setText("Cole uma chave de API antes de adicionar.")
+            return
+        prov, _clean = core_config.detect_provider(raw)
+        updated = list(core_config.API_KEYS)
+        if raw not in updated:
+            updated.append(raw)
+        core_config.save_api_keys(updated)
+        self.api_key_input.clear()
+        self._refresh_api_keys_list()
+        self.ai_model.set_keys()
+        prov_name = core_config.PROVIDERS_CATALOG.get(prov, {}).get("name", prov)
+        self.api_key_status.setText(f"Chave {prov_name} salva no .env e ativada.")
+        self.api_keys_changed.emit()
+
+    def _on_remove_api_key(self) -> None:
+        from core import config as core_config
+
+        row = self.api_keys_list.currentRow()
+        if row < 0 or row >= len(core_config.API_KEYS):
+            self.api_key_status.setText("Selecione uma chave na lista para remover.")
+            return
+        updated = list(core_config.API_KEYS)
+        updated.pop(row)
+        core_config.save_api_keys(updated)
+        self._refresh_api_keys_list()
+        self.ai_model.set_keys()
+        self.api_key_status.setText("Chave removida do .env.")
+        self.api_keys_changed.emit()
+
+    def _on_test_api_key(self) -> None:
+        from core import config as core_config
+        from core.providers import build_provider
+
+        raw = self.api_key_input.text().strip()
+        if not raw:
+            row = self.api_keys_list.currentRow()
+            if 0 <= row < len(core_config.API_KEYS):
+                raw = core_config.API_KEYS[row]
+            elif core_config.API_KEYS:
+                raw = core_config.API_KEYS[0]
+        if not raw:
+            self.api_key_status.setText("Informe ou selecione uma chave para testar.")
+            return
+
+        self.test_api_key_btn.setEnabled(False)
+        self.api_key_status.setText("Testando conexão com o provedor...")
+        try:
+            provider = build_provider(raw)
+            try:
+                models = provider.fetch_models()
+            finally:
+                provider.close()
+            if models:
+                self.api_key_status.setText(
+                    f"Conexão OK ({provider.provider_name}): {len(models)} modelo(s) disponível(is)."
+                )
+            else:
+                self.api_key_status.setText(
+                    f"Chave {provider.provider_name} não retornou modelos ativos. Verifique permissão/cota."
+                )
+        except Exception as exc:  # noqa: BLE001
+            self.api_key_status.setText(f"Falha ao testar chave: {exc}")
+        finally:
+            self.test_api_key_btn.setEnabled(True)
 
     def _on_min_duration_changed(self, value: int):
         if (
@@ -1029,6 +1222,8 @@ class SettingsDialog(QDialog):
             color_btn.changed.connect(self._refresh_preview)
         self.captions_enabled_toggle.toggled.connect(self._refresh_preview)
         self.caption_uppercase.toggled.connect(self._refresh_preview)
+        self.audio_normalize.toggled.connect(self._refresh_preview)
+        self.review_before_render.toggled.connect(self._refresh_preview)
         self.caption_glow.toggled.connect(self._refresh_preview)
         self.caption_italic.toggled.connect(self._refresh_preview)
         self.caption_emphasis.toggled.connect(self._refresh_preview)
@@ -1201,6 +1396,12 @@ class SettingsDialog(QDialog):
             self.crf.setValue(options.crf)
             self.preset.setCurrentText(options.preset)
             self.encoder.setCurrentText(options.encoder or "auto")
+            self.audio_normalize.setChecked(
+                bool(getattr(options, "audio_normalize", True))
+            )
+            self.review_before_render.setChecked(
+                bool(getattr(options, "review_before_render", False))
+            )
             for index in range(self.resolution.count()):
                 width, height = self.resolution.itemData(index)
                 if (width, height) == (options.width, options.height):
@@ -1238,7 +1439,7 @@ class SettingsDialog(QDialog):
             self.max_workers.setValue(options.max_workers)
 
             self.ai_model.set_value(options.ai_model)
-            w_model = (options.whisper_model or "large").strip()
+            w_model = (options.whisper_model or "turbo").strip()
             w_found = False
             for idx in range(self.whisper_model.count()):
                 if self.whisper_model.itemData(idx) == w_model:
@@ -1253,10 +1454,6 @@ class SettingsDialog(QDialog):
         self._sync_font_samples(options)
         self._update_preset_status(options)
 
-    def _apply_preset(self):
-        name = self.caption_preset.currentText()
-        self._on_preset_card_selected(name)
-
     def _write_into(self, options: ProcessingOptions):
         options.zoom = self.zoom.value()
         options.blur_sigma = self.blur.value()
@@ -1268,6 +1465,8 @@ class SettingsDialog(QDialog):
             if self.encoder.currentText() == "auto"
             else self.encoder.currentText()
         )
+        options.audio_normalize = self.audio_normalize.isChecked()
+        options.review_before_render = self.review_before_render.isChecked()
         res_data = self.resolution.currentData()
         if res_data:
             options.width, options.height = res_data

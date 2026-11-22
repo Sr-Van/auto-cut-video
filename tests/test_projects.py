@@ -10,8 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication, QPushButton
 
 from gui.main_window import MainWindow
+from gui.clip_card import ClipCard
 from gui.projects_dialog import (
-    ProjectAccordionItem,
     ProjectsDialog,
     open_upload_pages,
     reveal_in_explorer,
@@ -22,6 +22,7 @@ from utils.report import (
     load_projects_registry,
     load_report,
     register_project,
+    remove_missing_projects,
     save_report,
     update_clip_published,
 )
@@ -185,35 +186,67 @@ class TestProjectsRegistryAndDialog(unittest.TestCase):
             )
 
             dialog = ProjectsDialog(registry_path=reg_path)
-            self.assertEqual(len(dialog.accordion_items), 1)
-            item: ProjectAccordionItem = dialog.accordion_items[0]
+            self.assertEqual(len(dialog.project_rows), 1)
+            # O primeiro projeto ja vem selecionado e seus cortes aparecem no detalhe
+            self.assertEqual(dialog.detail.project["video_name"], "video_teste_gui")
+            self.assertEqual(len(dialog.detail.clip_cards), 1)
+            card: ClipCard = dialog.detail.clip_cards[0]
 
-            # Primeiro item vem expandido por padrao, sanfona alterna ao clicar
-            self.assertTrue(item.is_expanded())
-            item.toggle()
-            self.assertFalse(item.is_expanded())
-            item.toggle()
-            self.assertTrue(item.is_expanded())
+            # Filtro "Nao publicados" mostra o projeto; "Publicados" nao
+            dialog.filter_seg.set_current(1)
+            self.assertFalse(dialog.project_rows[0].isHidden())
+            dialog.filter_seg.set_current(2)
+            self.assertTrue(dialog.project_rows[0].isHidden())
+            self.assertTrue(dialog.empty_list.text())
+            dialog.filter_seg.set_current(0)
+            card = dialog.detail.clip_cards[0]
 
-            # Simula clique no botao de publicado dentro do projeto
-            pub_buttons = [
-                b
-                for b in item.findChildren(type(item.header_button))
-                if b.objectName() == "PublishedBtn"
-            ]
-            self.assertEqual(len(pub_buttons), 1)
-            pub_btn = pub_buttons[0]
-            self.assertEqual(pub_btn.property("published"), "false")
-
-            pub_btn.click()
-            self.assertEqual(pub_btn.property("published"), "true")
+            # Marcar como publicado pelo card grava no relatorio
+            self.assertFalse(card.is_published())
+            card.set_published(True)
             self.assertTrue(load_report(rep_path)[0]["published"])
+            self.assertIn("1 publicado", dialog.detail.count_line.text())
 
-            # Excluir projeto via metodo confirm_and_delete(skip_confirm=True)
-            deleted = item.confirm_and_delete(skip_confirm=True)
+            # Busca sem resultado mostra mensagem em vez de area vazia
+            dialog.search_input.setText("nao-existe-xyz")
+            self.assertTrue(dialog.project_rows[0].isHidden())
+            self.assertIn("Nenhum projeto encontrado", dialog.empty_list.text())
+            dialog.search_input.setText("")
+
+            # Excluir projeto pelo detalhe
+            deleted = dialog.detail.confirm_and_delete(skip_confirm=True)
             self.assertTrue(deleted)
             self.assertFalse(proj_dir.exists())
-            self.assertEqual(len(dialog.accordion_items), 0)
+            self.assertEqual(len(dialog.project_rows), 0)
+
+    def test_remove_missing_projects_keeps_disk_untouched(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            reg_path = Path(tmp) / "projetos.json"
+            alive = Path(tmp) / "vivo"
+            clips = [{"title": "A", "viral_score": 9}]
+            rep_alive = save_report(clips, alive)
+            register_project(
+                video_name="vivo", project_dir=alive, report_path=rep_alive,
+                clips=clips, registry_path=reg_path,
+            )
+            gone = Path(tmp) / "sumiu"
+            rep_gone = save_report(clips, gone)
+            register_project(
+                video_name="sumiu", project_dir=gone, report_path=rep_gone,
+                clips=clips, registry_path=reg_path,
+            )
+            import shutil
+            shutil.rmtree(gone)
+
+            dialog = ProjectsDialog(registry_path=reg_path)
+            self.assertTrue(dialog.missing_row.isVisibleTo(dialog))
+            removed = dialog.remove_missing()
+            self.assertEqual(removed, 1)
+            self.assertEqual(
+                [p["video_name"] for p in load_projects_registry(reg_path)], ["vivo"]
+            )
+            self.assertTrue(alive.exists())
+            self.assertEqual(remove_missing_projects(reg_path), 0)
 
     def test_compute_average_viral_score_empty(self) -> None:
         self.assertEqual(compute_average_viral_score([]), 0.0)
@@ -232,10 +265,8 @@ class TestProjectsRegistryAndDialog(unittest.TestCase):
         win.workspace_button.setChecked(True)
         self.assertEqual(win.main_stack.currentIndex(), 0)
 
-        # Alterar preset rápido na tela principal atualiza options e sincroniza com settings_view
-        idx = win.quick_preset_combo.findData("stronda_red_box")
-        self.assertGreaterEqual(idx, 0)
-        win.quick_preset_combo.setCurrentIndex(idx)
+        # Escolher um estilo na tela Cortar atualiza options e sincroniza com Ajustes
+        win.select_quick_preset("stronda_red_box")
         self.assertEqual(win.options.caption_highlight_color, "#EF4444")
 
         win.open_settings()
@@ -243,11 +274,24 @@ class TestProjectsRegistryAndDialog(unittest.TestCase):
             win.settings_view.preset_grid.selected_preset(), "stronda_red_box"
         )
 
-        # Simula finalização de cortes e verifica mudança automática para aba de Cortes Gerados
+        # Duração e rigor em linguagem simples mapeiam para os valores técnicos
         win.workspace_button.setChecked(True)
-        win.output_tabs.set_current(1)
-        self.assertEqual(win.output_stack.currentIndex(), 1)
+        win.duration_seg.set_current(0)
+        self.assertEqual(
+            (win.options.min_clip_duration, win.options.max_clip_duration), (15, 40)
+        )
+        win.rigor_seg.set_current(2)
+        self.assertEqual(win.options.min_viral_score, 9)
 
+        # Link e arquivo: uma origem por vez, link inválido não habilita o botão
+        win.video_link.setText("isso nao e link")
+        self.assertFalse(win.process_button.isEnabled())
+        win.video_link.setText("youtu.be/abc123")
+        self.assertTrue(win.process_button.isEnabled())
+        self.assertEqual(win._active_source()[0], "https://youtu.be/abc123")
+        win.video_link.clear()
+
+        # Ao concluir, a tela Cortar mostra os resultados
         win.on_finished(
             {
                 "clips": [
@@ -263,36 +307,35 @@ class TestProjectsRegistryAndDialog(unittest.TestCase):
                 "report_path": None,
             }
         )
-        self.assertEqual(win.output_stack.currentIndex(), 0)
-        self.assertEqual(win.result_count.text(), "1 corte")
+        self.assertEqual(win.workspace_stack.currentIndex(), 2)
+        self.assertEqual(win.result_count.text(), "1 corte pronto")
+        self.assertEqual(len(win.results_grid.widgets()), 1)
 
-    def test_postar_button_opens_youtube_and_tiktok_tabs_and_copies_clipboard(self) -> None:
+        # "Novo vídeo" volta para a configuração
+        win.start_new_video()
+        self.assertEqual(win.workspace_stack.currentIndex(), 0)
+
+    def test_postar_opens_upload_pages_without_touching_clipboard(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             dummy_file = Path(tmp) / "corte_teste.mp4"
             dummy_file.write_bytes(b"dummy mp4")
+            QApplication.clipboard().setText("titulo copiado antes")
 
             with patch("webbrowser.open_new_tab") as mock_open_tab, \
                  patch("gui.projects_dialog.reveal_in_explorer") as mock_reveal:
                 open_upload_pages(str(dummy_file))
 
-                # Verifica que as duas abas foram abertas
                 opened_urls = [call.args[0] for call in mock_open_tab.call_args_list]
                 self.assertIn("https://www.youtube.com/upload", opened_urls)
                 self.assertIn(
                     "https://www.tiktok.com/tiktokstudio/upload?from=webapp&tab=video",
                     opened_urls,
                 )
-
-                # Verifica que o arquivo foi destacado no gerenciador de arquivos
                 mock_reveal.assert_called_once_with(dummy_file.resolve())
 
-                # Verifica que o caminho foi copiado para a área de transferência
-                clipboard_text = QApplication.clipboard().text()
-                self.assertEqual(
-                    Path(clipboard_text).resolve(), dummy_file.resolve()
-                )
+            # A área de transferência continua com o que o usuário copiou
+            self.assertEqual(QApplication.clipboard().text(), "titulo copiado antes")
 
-            # Testa reveal_in_explorer abrindo a pasta onde o vídeo está (imune ao bug de Documents)
             with patch("PySide6.QtGui.QDesktopServices.openUrl") as mock_open_url:
                 reveal_in_explorer(str(dummy_file))
                 mock_open_url.assert_called_once()
@@ -302,30 +345,17 @@ class TestProjectsRegistryAndDialog(unittest.TestCase):
                     dummy_file.parent.resolve(),
                 )
 
-            # Verifica o botão Postar no ProjectAccordionItem
-            reg_path = Path(tmp) / "projetos.json"
-            proj_dir = Path(tmp) / "proj"
-            clips = [{"title": "Corte A", "viral_score": 9, "file": str(dummy_file)}]
-            rep_path = save_report(clips, proj_dir, [str(dummy_file)])
-            register_project(
-                video_name="proj",
-                project_dir=proj_dir,
-                report_path=rep_path,
-                clips=clips,
-                clip_paths=[str(dummy_file)],
-                registry_path=reg_path,
-            )
-
-            dialog = ProjectsDialog(registry_path=reg_path)
-            item = dialog.accordion_items[0]
-            post_buttons = [
-                b for b in item.findChildren(QPushButton) if b.text() == "Postar"
-            ]
-            self.assertEqual(len(post_buttons), 1)
-
+            # Card do corte: "Postar" é a ação principal e depois vira "Marcar como publicado"
+            clip = {"title": "Corte A", "viral_score": 9, "file": str(dummy_file)}
+            card = ClipCard(clip, str(dummy_file), 0)
+            self.assertEqual(card.post_button.text(), "Postar ↗")
             with patch("gui.projects_dialog.open_upload_pages") as mock_open:
-                post_buttons[0].click()
+                card.post_button.click()
                 mock_open.assert_called_once_with(str(dummy_file))
+            self.assertIn("Marcar como publicado", card.post_button.text())
+            card.post_button.click()
+            self.assertTrue(card.is_published())
+            self.assertIn("Postar de novo", card.post_button.text())
 
 
 if __name__ == "__main__":

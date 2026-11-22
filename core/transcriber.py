@@ -55,6 +55,7 @@ def transcribe(
     language: str | None = None,
     compute_type: str | None = None,
     cancel_event: Event | None = None,
+    progress_callback=None,
 ) -> list[Segment]:
     check_cancelled(cancel_event)
     model = get_model(model_name, compute_type=compute_type)
@@ -67,14 +68,30 @@ def transcribe(
     raw_segments = []
     with _RUN_LOCK:
         check_cancelled(cancel_event)
-        segments_iter, _info = model.transcribe(
+        segments_iter, info = model.transcribe(
             audio_path,
             language=eff_lang,
             word_timestamps=word_timestamps,
+            vad_filter=True,
+            vad_parameters={
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 200,
+            },
         )
+        total_dur = float(getattr(info, "duration", 0.0) or 0.0)
+        last_pct = -1
         for seg in segments_iter:
             check_cancelled(cancel_event)
             raw_segments.append(seg)
+            if progress_callback is not None and total_dur > 0:
+                frac = max(
+                    0.0,
+                    min(1.0, float(getattr(seg, "end", 0.0) or 0.0) / total_dur),
+                )
+                pct = int(round(frac * 100))
+                if pct != last_pct:
+                    last_pct = pct
+                    progress_callback(frac)
 
     result: list[Segment] = []
     for i, seg in enumerate(raw_segments, start=1):

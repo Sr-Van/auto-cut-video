@@ -4,8 +4,32 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 from pathlib import Path
 from threading import Event
+
+NO_WINDOW_FLAGS: int = (
+    getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+)
+
+
+def run_cmd(
+    cmd: list[str],
+    *,
+    cwd: str | None = None,
+    timeout: float | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Executa um subprocesso oculto no Windows com captura UTF-8 segura."""
+    return subprocess.run(
+        cmd,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        creationflags=NO_WINDOW_FLAGS,
+    )
 
 
 class PipelineCancelledError(RuntimeError):
@@ -46,7 +70,7 @@ def run_interruptible_cmd(
     check_cancelled(cancel_event)
 
     if cancel_event is None:
-        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+        return run_cmd(cmd, cwd=cwd)
 
     proc = subprocess.Popen(
         cmd,
@@ -54,6 +78,9 @@ def run_interruptible_cmd(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        creationflags=NO_WINDOW_FLAGS,
     )
     try:
         while True:
@@ -85,4 +112,11 @@ def run_interruptible_cmd(
             proc.kill()
             proc.wait(timeout=2.0)
         raise
+    finally:
+        for stream in (proc.stdout, proc.stderr):
+            if stream is not None and not stream.closed:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 

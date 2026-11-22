@@ -3,7 +3,7 @@ import tempfile
 from pathlib import Path
 from threading import Event
 
-from core import ai_analyzer, audio, cache, downloader, transcriber, video_ops
+from core import ai_analyzer, audio, cache, downloader, layouts, transcriber, video_ops
 from core.config import BASE_DIR, OUTPUT_DIR
 from core.exceptions import PipelineCancelledError, check_cancelled
 from core.options import ProcessingOptions
@@ -38,6 +38,7 @@ def run(
     force=False,
     options: ProcessingOptions | None = None,
     cancel_event: Event | None = None,
+    review_callback=None,
 ):
     options = (options or ProcessingOptions.from_env_or_config()).normalize()
     check_cancelled(cancel_event)
@@ -46,6 +47,7 @@ def run(
         raise ValueError("Informe yt_link ou video_path.")
 
     try:
+        out_root = Path(output_dir) if output_dir else OUTPUT_DIR
         if yt_link:
             _emit(progress_callback, "baixando", 0, "Baixando video...")
 
@@ -59,9 +61,10 @@ def run(
                 last_scaled[0] = scaled
                 _emit(progress_callback, stage, scaled, message)
 
+            downloads_dir = out_root / "_downloads"
             video_path = downloader.download_video(
                 yt_link,
-                diretorio_saida=output_dir or str(OUTPUT_DIR),
+                diretorio_saida=str(downloads_dir),
                 progress_callback=download_progress if progress_callback else None,
                 cancel_event=cancel_event,
             )
@@ -71,16 +74,19 @@ def run(
         check_cancelled(cancel_event)
         video_path = str(video_path)
         video_stem = Path(video_path).stem
-        out_root = Path(output_dir) if output_dir else OUTPUT_DIR
         out_dir = out_root / video_stem
+
+        layout = layouts.get_layout(options.layout_id)
+        need_full_words = (
+            options.captions_enabled or layout.dynamic
+        ) and options.caption_transcribe_mode == "full"
 
         key = cache.make_key(
             video_path,
             options.whisper_model,
             options.language,
             options.whisper_compute_type,
-            word_timestamps=options.captions_enabled
-            and options.caption_transcribe_mode == "full",
+            word_timestamps=need_full_words,
         )
 
         segments = None if force else cache.load_transcript(out_dir, key)
@@ -101,33 +107,68 @@ def run(
 
                 check_cancelled(cancel_event)
                 _emit(progress_callback, "transcricao", 20, "Transcrevendo audio...")
+                last_trans_pct = [20]
+
+                def transcribe_progress(frac: float) -> None:
+                    check_cancelled(cancel_event)
+                    pct = 20 + int(frac * 28)
+                    if pct <= last_trans_pct[0]:
+                        return
+                    last_trans_pct[0] = pct
+                    _emit(
+                        progress_callback,
+                        "transcricao",
+                        pct,
+                        f"Transcrevendo audio... {int(round(frac * 100))}%",
+                    )
+
                 segments = transcriber.transcribe(
                     audio_path,
-                    word_timestamps=options.captions_enabled
-                    and options.caption_transcribe_mode == "full",
+                    word_timestamps=need_full_words,
                     model_name=options.whisper_model,
                     language=options.language,
                     compute_type=options.whisper_compute_type,
                     cancel_event=cancel_event,
+                    progress_callback=transcribe_progress if progress_callback else None,
                 )
 
             cache.save_transcript(out_dir, key, segments)
 
         check_cancelled(cancel_event)
         if segments:
-            focus = options.focus_instruction
-            msg = (
-                f"Analisando com IA (foco: {focus[:60]})..."
-                if focus
-                else "Analisando com IA..."
+            analysis_key = cache.make_analysis_key(
+                key,
+                focus=options.focus_instruction,
+                max_clips=options.max_clips,
+                min_viral_score=options.min_viral_score,
+                min_clip_duration=options.min_clip_duration,
+                max_clip_duration=options.max_clip_duration,
+                ai_model=options.ai_model,
             )
-            _emit(progress_callback, "analise", 50, msg)
-            clips = ai_analyzer.analyze(
-                segments,
-                progress_callback=progress_callback,
-                options=options,
-                cancel_event=cancel_event,
-            )
+            cached_clips = None if force else cache.load_analysis(out_dir, analysis_key)
+            if cached_clips is not None:
+                _emit(
+                    progress_callback,
+                    "analise",
+                    60,
+                    "Análise de IA em cache, pulando...",
+                )
+                clips = cached_clips
+            else:
+                focus = options.focus_instruction
+                msg = (
+                    f"Analisando com IA (foco: {focus[:60]})..."
+                    if focus
+                    else "Analisando com IA..."
+                )
+                _emit(progress_callback, "analise", 50, msg)
+                clips = ai_analyzer.analyze(
+                    segments,
+                    progress_callback=progress_callback,
+                    options=options,
+                    cancel_event=cancel_event,
+                )
+                cache.save_analysis(out_dir, analysis_key, clips)
         else:
             clips = []
 
@@ -142,6 +183,16 @@ def run(
             options.max_clip_duration,
             options.pause_gap,
         )
+
+        if options.review_before_render and review_callback is not None and clips:
+            _emit(progress_callback, "revisao", 68, "Aguardando revisão dos cortes pelo usuário...")
+            reviewed = review_callback(list(clips))
+            check_cancelled(cancel_event)
+            if not reviewed:
+                from core.exceptions import PipelineCancelledError
+
+                raise PipelineCancelledError("Nenhum corte selecionado na revisão.")
+            clips = list(reviewed)
 
         check_cancelled(cancel_event)
         _emit(progress_callback, "corte", 70, "Cortando clipes...")

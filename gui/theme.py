@@ -99,15 +99,6 @@ QToolTip {{
     font-weight: 700;
     color: {TEXT};
 }}
-#BrandTag {{
-    background: {PANEL_2};
-    border: 1px solid {LINE_STRONG};
-    border-radius: 4px;
-    color: {MUTED};
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-}}
 #NavBar {{
     background: {PANEL};
     border: 1px solid {LINE};
@@ -155,12 +146,6 @@ QPushButton#NavTab:checked {{
 }}
 
 /* ---------- Tipografia e Textos ---------- */
-#Eyebrow {{
-    color: {FAINT};
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.1px;
-}}
 #Title {{
     font-size: 18px;
     font-weight: 700;
@@ -293,7 +278,7 @@ QPushButton {{
 }}
 QPushButton:hover {{
     background: {PANEL_3};
-    border-color: #434C63;
+    border-color: #4A4A4A;
 }}
 QPushButton:disabled {{
     color: {FAINT};
@@ -330,9 +315,9 @@ QPushButton#ProcessButton:hover {{
     border-color: {ACCENT_HOVER};
 }}
 QPushButton#ProcessButton:disabled {{
-    background: {ACCENT_SOFT};
-    border: 1px dashed {LINE_ACCENT};
-    color: {MUTED};
+    background: {PANEL_2};
+    border: 1px solid {LINE};
+    color: {FAINT};
 }}
 QPushButton#Ghost {{
     background: {PANEL_2};
@@ -344,7 +329,7 @@ QPushButton#Ghost {{
 }}
 QPushButton#Ghost:hover {{
     background: {PANEL_3};
-    border-color: #434C63;
+    border-color: #4A4A4A;
 }}
 QPushButton#IconBtn {{
     background: {PANEL_2};
@@ -477,8 +462,8 @@ QProgressBar::chunk {{
     background: {WARNING_SOFT};
 }}
 #Step[state="done"] {{
-    border-color: rgba(16, 185, 129, 0.35);
-    background: rgba(16, 185, 129, 0.06);
+    border-color: rgba(34, 197, 94, 0.35);
+    background: {BG_2};
 }}
 #Step[state="error"] {{
     border-color: {DANGER};
@@ -591,16 +576,16 @@ QPlainTextEdit#Log {{
 #ClipScore {{
     background: {SUCCESS_SOFT};
     color: {SUCCESS};
-    border: 1px solid rgba(16, 185, 129, 0.35);
+    border: 1px solid rgba(34, 197, 94, 0.35);
     border-radius: 4px;
     font-weight: 700;
     font-size: 11px;
     padding: 2px 6px;
 }}
 #ClipScore[tier="mid"] {{
-    background: {ACCENT_SOFT};
-    color: #60A5FA;
-    border: 1px solid rgba(37, 99, 235, 0.35);
+    background: {PANEL_2};
+    color: {MUTED};
+    border: 1px solid {LINE_STRONG};
 }}
 #ClipTime {{
     color: {FAINT};
@@ -613,8 +598,6 @@ QPlainTextEdit#Log {{
     color: {TEXT};
 }}
 #ClipHook {{
-    border-left: 2px solid {ACCENT};
-    padding-left: 8px;
     color: {MUTED};
     font-size: 12px;
 }}
@@ -721,10 +704,9 @@ QPushButton#ProjectHeaderBtn:hover {{
     border-radius: 8px;
 }}
 #SectionTitle {{
-    color: {FAINT};
-    font-size: 10px;
+    color: {TEXT};
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.8px;
     padding-top: 2px;
 }}
 #Note {{
@@ -740,6 +722,459 @@ QPushButton#ProjectHeaderBtn:hover {{
     color: {FAINT};
     font-family: "{mono}";
     font-size: 10px;
+}}
+
+/* ---------- Fluxo guiado (Cortar) ---------- */
+#PageTitle {{
+    font-size: 18px;
+    font-weight: 800;
+    color: {TEXT};
+}}
+#StepTitleBig {{
+    font-size: 15px;
+    font-weight: 800;
+    color: {TEXT};
+}}
+#StepNum {{
+    border: 1px solid {LINE_STRONG};
+    border-radius: 12px;
+    color: {MUTED};
+    font-size: 11px;
+    font-weight: 700;
+}}
+#StepNum[state="active"] {{
+    border-color: {ACCENT};
+    color: {ACCENT_TEXT};
+}}
+#StepNum[state="done"] {{
+    border-color: {SUCCESS};
+    color: {SUCCESS};
+    background: {SUCCESS_SOFT};
+}}
+#InfoBanner {{
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-left: 3px solid {ACCENT};
+    border-radius: 6px;
+    color: {TEXT};
+    font-size: 12px;
+    padding: 10px 12px;
+}}
+#SourceDrop {{
+    background: {BG_2};
+    border: 1px dashed {LINE_STRONG};
+    border-radius: 8px;
+}}
+#SourceDrop[drag="true"] {{
+    border: 1px dashed {ACCENT};
+    background: {ACCENT_SOFT};
+}}
+#SourceHint {{
+    color: {FAINT};
+    font-size: 11px;
+}}
+#SourceHint[state="error"] {{
+    color: #F87171;
+}}
+#SourceHint[state="ok"] {{
+    color: {SUCCESS};
+}}
+#FileName {{
+    color: {TEXT};
+    font-size: 13px;
+    font-weight: 700;
+}}
+#OutputPath {{
+    color: {MUTED};
+    font-size: 12px;
+}}
+#WarnText {{
+    color: {WARNING};
+    font-size: 12px;
+}}
+#OptionCard {{
+    background: {BG_2};
+    border: 1px solid {LINE};
+    border-radius: 8px;
+}}
+#OptionCard:hover {{
+    border-color: {LINE_STRONG};
+}}
+#OptionCard[selected="true"] {{
+    background: {ACCENT_SOFT};
+    border: 1px solid {ACCENT};
+}}
+#OptionCard:focus {{
+    border: 1px solid {ACCENT_TEXT};
+}}
+#OptionCard:disabled {{
+    background: {BG};
+}}
+#OptionName {{
+    color: {TEXT};
+    font-size: 12px;
+    font-weight: 700;
+}}
+#OptionCard[selected="true"] #OptionName {{
+    color: {ACCENT_TEXT};
+}}
+#OptionTag {{
+    color: {FAINT};
+    font-size: 11px;
+}}
+#PresetStrip {{
+    background: #0B0B0B;
+    border-radius: 5px;
+}}
+QPushButton#MoreCard {{
+    background: transparent;
+    border: 1px dashed {LINE_STRONG};
+    border-radius: 8px;
+    color: {MUTED};
+    font-size: 12px;
+}}
+QPushButton#MoreCard:hover {{
+    border-color: {ACCENT};
+    color: {TEXT};
+}}
+QPushButton#DashedButton {{
+    background: transparent;
+    border: 1px dashed {LINE_STRONG};
+    border-radius: 6px;
+    color: {MUTED};
+    font-size: 12px;
+    padding: 4px 10px;
+}}
+QPushButton#DashedButton:hover {{
+    color: {TEXT};
+    border-color: {MUTED};
+}}
+QPushButton#LinkUnderline {{
+    background: transparent;
+    border: none;
+    color: {MUTED};
+    padding: 0px;
+    font-size: 12px;
+    text-decoration: underline;
+}}
+QPushButton#LinkUnderline:hover {{
+    color: {TEXT};
+}}
+QPushButton#Link:disabled, QPushButton#LinkUnderline:disabled {{
+    background: transparent;
+    color: {LINE_STRONG};
+}}
+
+#ChoiceSeg {{
+    background: {BG_2};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 6px;
+}}
+#ChoiceSeg QPushButton#Segment {{
+    padding: 6px 10px;
+    font-size: 12px;
+}}
+#ChoiceSeg QPushButton#Segment:checked {{
+    background: {ACCENT};
+    color: {ON_ACCENT};
+    font-weight: 800;
+}}
+#FilterSeg {{
+    background: {BG};
+    border: 1px solid {LINE};
+    border-radius: 6px;
+}}
+#FilterSeg QPushButton#Segment {{
+    padding: 4px 7px;
+}}
+#FilterSeg QPushButton#Segment:checked {{
+    background: {ACCENT};
+    color: {ON_ACCENT};
+    font-weight: 800;
+}}
+#ActionFooter {{
+    background: {BG_2};
+    border-top: 1px solid {LINE};
+}}
+
+/* ---------- Processando ---------- */
+#BigPercent {{
+    color: {ACCENT_TEXT};
+    font-size: 30px;
+    font-weight: 800;
+}}
+#EtaLabel {{
+    color: {TEXT};
+    font-size: 13px;
+    font-weight: 700;
+}}
+#StepRow {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+}}
+#StepRow[state="active"] {{
+    background: {WARNING_SOFT};
+    border: 1px solid {WARNING};
+}}
+#StepRow[state="error"] {{
+    background: {DANGER_SOFT};
+    border: 1px solid {DANGER};
+}}
+#StepBadge {{
+    border: 1px solid {LINE_STRONG};
+    border-radius: 13px;
+    color: {MUTED};
+    font-size: 11px;
+    font-weight: 700;
+}}
+#StepRow[state="active"] #StepBadge {{
+    border-color: {WARNING};
+    color: {WARNING};
+}}
+#StepRow[state="done"] #StepBadge {{
+    border-color: {SUCCESS};
+    color: {SUCCESS};
+    background: {SUCCESS_SOFT};
+}}
+#StepRow[state="error"] #StepBadge {{
+    border-color: {DANGER};
+    color: {DANGER};
+}}
+#StepRowTitle {{
+    color: {MUTED};
+    font-size: 13px;
+    font-weight: 700;
+}}
+#StepRow[state="active"] #StepRowTitle {{
+    color: {ACCENT_TEXT};
+}}
+#StepRow[state="done"] #StepRowTitle {{
+    color: {TEXT};
+}}
+#StepRowHint {{
+    color: {FAINT};
+    font-size: 11px;
+}}
+#StepRowStatus {{
+    color: {FAINT};
+    font-size: 11px;
+}}
+#StepRow[state="active"] #StepRowStatus {{
+    color: {WARNING};
+    font-weight: 700;
+}}
+#StepRow[state="error"] #StepRowStatus {{
+    color: #F87171;
+}}
+#ErrorBanner {{
+    background: {DANGER_SOFT};
+    border: 1px solid rgba(239, 68, 68, 0.45);
+    border-radius: 8px;
+}}
+#ErrorTitle {{
+    color: #F87171;
+    font-size: 14px;
+    font-weight: 800;
+}}
+#ErrorText {{
+    color: {TEXT};
+    font-size: 12px;
+}}
+
+/* ---------- Card de corte ---------- */
+#ClipCard {{
+    background: {PANEL};
+    border: 1px solid {LINE};
+    border-radius: 8px;
+}}
+#ClipCard:hover {{
+    border-color: {LINE_STRONG};
+}}
+#ClipCard[posted="true"] {{
+    border: 1px solid {SUCCESS};
+}}
+#ClipThumbArea {{
+    background: #0E0E0E;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+}}
+#PubChip {{
+    background: {SUCCESS_SOFT};
+    border: 1px solid {SUCCESS};
+    border-radius: 9px;
+    color: {SUCCESS};
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 8px;
+}}
+QPushButton#PostButton {{
+    background: {ACCENT};
+    border: 1px solid {ACCENT};
+    color: {ON_ACCENT};
+    font-weight: 800;
+    padding: 6px 14px;
+}}
+QPushButton#PostButton:hover {{
+    background: {ACCENT_HOVER};
+    border-color: {ACCENT_HOVER};
+}}
+QPushButton#MarkPublished {{
+    background: {SUCCESS_SOFT};
+    border: 1px solid {SUCCESS};
+    color: {SUCCESS};
+    font-weight: 700;
+    padding: 6px 12px;
+}}
+QToolButton#MoreBtn {{
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 6px;
+    color: {TEXT};
+    font-size: 14px;
+    font-weight: 700;
+    padding: 3px 9px;
+}}
+QToolButton#MoreBtn:hover {{
+    border-color: {ACCENT};
+    color: {ACCENT_TEXT};
+}}
+QToolButton#MoreBtn::menu-indicator {{
+    image: none;
+    width: 0px;
+}}
+QMenu {{
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-radius: 8px;
+    padding: 6px;
+}}
+QMenu::item {{
+    padding: 7px 14px 7px 10px;
+    border-radius: 5px;
+    color: {TEXT};
+    font-size: 12px;
+}}
+QMenu::item:selected {{
+    background: {PANEL_3};
+}}
+QMenu::item:disabled {{
+    color: {FAINT};
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {LINE_STRONG};
+    margin: 5px 4px;
+}}
+#ResultsEmptyBox {{
+    background: {BG_2};
+    border: 1px dashed {LINE_STRONG};
+    border-radius: 8px;
+}}
+
+/* ---------- Toast ---------- */
+#Toast {{
+    background: {PANEL_2};
+    border: 1px solid {LINE_STRONG};
+    border-left: 3px solid {ACCENT};
+    border-radius: 8px;
+}}
+#ToastIcon {{
+    color: {ACCENT_TEXT};
+    font-size: 15px;
+    font-weight: 800;
+}}
+#ToastTitle {{
+    color: {TEXT};
+    font-size: 12px;
+    font-weight: 700;
+}}
+#ToastBody {{
+    color: {MUTED};
+    font-size: 12px;
+}}
+
+/* ---------- Projetos (lista + detalhe) ---------- */
+#ProjectsSide {{
+    background: {BG_2};
+    border-right: 1px solid {LINE};
+}}
+#ProjectsSideList {{
+    background: {BG_2};
+}}
+#ProjectRow {{
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid {LINE};
+    border-left: 3px solid transparent;
+}}
+#ProjectRow:hover {{
+    background: rgba(255, 255, 255, 0.03);
+}}
+#ProjectRow[selected="true"] {{
+    background: {PANEL_2};
+    border-left: 3px solid {ACCENT};
+}}
+#ProjectRow:focus {{
+    border-left: 3px solid {ACCENT_TEXT};
+}}
+#ProjectRowTitle {{
+    color: {TEXT};
+    font-size: 12px;
+    font-weight: 700;
+}}
+#ProjectRowMeta {{
+    color: {FAINT};
+    font-size: 11px;
+}}
+#ProjectRowMeta[missing="true"] {{
+    color: {WARNING};
+}}
+#DetailTitle {{
+    color: {TEXT};
+    font-size: 17px;
+    font-weight: 800;
+}}
+QPushButton#DangerLink {{
+    background: transparent;
+    border: none;
+    color: {FAINT};
+    font-size: 12px;
+    padding: 4px 6px;
+}}
+QPushButton#DangerLink:hover {{
+    color: #F87171;
+}}
+#ListEmpty {{
+    color: {FAINT};
+    font-size: 12px;
+    padding: 24px 16px;
+}}
+
+/* ---------- Ajustes (navegação lateral) ---------- */
+#SideNav {{
+    background: {BG_2};
+    border-right: 1px solid {LINE};
+}}
+QPushButton#SideNavItem {{
+    background: transparent;
+    border: none;
+    border-left: 3px solid transparent;
+    border-radius: 6px;
+    text-align: left;
+    padding: 9px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: {MUTED};
+}}
+QPushButton#SideNavItem:hover:!checked {{
+    color: {TEXT};
+    background: rgba(255, 255, 255, 0.03);
+}}
+QPushButton#SideNavItem:checked {{
+    background: {PANEL_2};
+    border-left: 3px solid {ACCENT};
+    color: {TEXT};
 }}
 
 /* ---------- Scrollbars ---------- */
@@ -782,13 +1217,17 @@ def apply_theme(app: QApplication):
     """Aplica paleta utilitária escura e folha de estilo limpa."""
     app.setStyle("Fusion")
 
-    sans = _pick_font(
-        ["Segoe UI Variable Text", "Inter", "Segoe UI"], "Segoe UI"
-    )
+    # JetBrainsMono Nerd Font como fonte única da interface; cai para a
+    # JetBrains Mono comum e depois para monoespaçadas do sistema.
+    jetbrains = [
+        "JetBrainsMono Nerd Font",
+        "JetBrainsMono NF",
+        "JetBrainsMono Nerd Font Mono",
+        "JetBrains Mono",
+    ]
+    mono = _pick_font([*jetbrains, "Cascadia Code"], "Consolas")
+    sans = mono
     serif = sans
-    mono = _pick_font(
-        ["JetBrains Mono", "Cascadia Code", "Consolas"], "Consolas"
-    )
 
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(BG))

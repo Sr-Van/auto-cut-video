@@ -1,3 +1,6 @@
+import math
+
+
 def seconds_to_hhmmss(seconds: float) -> str:
     total = int(round(seconds))
     hours, remainder = divmod(total, 3600)
@@ -6,13 +9,20 @@ def seconds_to_hhmmss(seconds: float) -> str:
 
 
 def hhmmss_to_seconds(timestamp: str) -> float:
-    parts = timestamp.strip().split(":")
+    if not isinstance(timestamp, str):
+        raise ValueError(f"Timestamp invalido: {timestamp}")
+    parts = [p.strip() for p in timestamp.strip().split(":")]
+    if len(parts) not in (2, 3) or any(not p or p.startswith("-") for p in parts):
+        raise ValueError(f"Timestamp invalido: {timestamp}")
     if len(parts) == 2:
         hours = 0
-        minutes, secs = int(parts[0]), int(parts[1])
-    elif len(parts) == 3:
-        hours, minutes, secs = int(parts[0]), int(parts[1]), int(parts[2])
+        minutes = int(parts[0])
+        secs = float(parts[1].replace(",", "."))
     else:
+        hours = int(parts[0])
+        minutes = int(parts[1])
+        secs = float(parts[2].replace(",", "."))
+    if hours < 0 or minutes < 0 or secs < 0 or not math.isfinite(secs):
         raise ValueError(f"Timestamp invalido: {timestamp}")
     return hours * 3600 + minutes * 60 + secs
 

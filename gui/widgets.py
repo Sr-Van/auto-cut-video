@@ -122,13 +122,6 @@ def flash_button(button, text: str, ms: int = 1400) -> None:
     QTimer.singleShot(ms, restore)
 
 
-def eyebrow(text: str) -> QLabel:
-    """Rótulo de seção compacto em caixa alta, sem ornamentos decorativos."""
-    lbl = QLabel(text.upper())
-    lbl.setObjectName("Eyebrow")
-    return lbl
-
-
 def separator() -> QFrame:
     line = QFrame()
     line.setObjectName("Separator")
@@ -221,7 +214,7 @@ class Switch(QAbstractButton):
         enabled = self.isEnabled()
 
         track = QRectF(0, (self.height() - 18) / 2, 32, 18)
-        off = QColor("#282E3B")
+        off = QColor(theme.LINE_STRONG)
         on = QColor(theme.ACCENT)
         color = QColor(
             int(off.red() + (on.red() - off.red()) * self._offset),
@@ -287,6 +280,243 @@ class Segmented(QFrame):
         btn = self.group.button(index)
         if btn:
             btn.setChecked(True)
+
+    def clear_selection(self):
+        """Desmarca todos os segmentos (valor atual fora das opcoes)."""
+        self.group.setExclusive(False)
+        for btn in self.group.buttons():
+            btn.setChecked(False)
+        self.group.setExclusive(True)
+
+    def set_label(self, index: int, text: str):
+        btn = self.group.button(index)
+        if btn:
+            btn.setText(text)
+
+
+class SideNav(QFrame):
+    """Navegacao vertical de secoes (estilo Configuracoes do Windows)."""
+
+    changed = Signal(int)
+
+    def __init__(self, items, parent=None):
+        """items: lista de (titulo, subtitulo|None); None separa grupos."""
+        super().__init__(parent)
+        self.setObjectName("SideNav")
+        self.setFixedWidth(210)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 16, 12, 16)
+        layout.setSpacing(2)
+        self.group = QButtonGroup(self)
+        self.group.setExclusive(True)
+        index = 0
+        for item in items:
+            if item is None:
+                layout.addSpacing(6)
+                layout.addWidget(separator())
+                layout.addSpacing(6)
+                continue
+            title, sub = item
+            button = QPushButton(title if not sub else f"{title}\n{sub}")
+            button.setObjectName("SideNavItem")
+            button.setCheckable(True)
+            button.setCursor(Qt.PointingHandCursor)
+            self.group.addButton(button, index)
+            layout.addWidget(button)
+            index += 1
+        layout.addStretch(1)
+        self.group.button(0).setChecked(True)
+        self.group.idToggled.connect(self._on_toggled)
+
+    def _on_toggled(self, index, checked):
+        if checked:
+            self.changed.emit(index)
+
+    def current(self) -> int:
+        return self.group.checkedId()
+
+    def set_current(self, index: int):
+        btn = self.group.button(index)
+        if btn:
+            btn.setChecked(True)
+
+
+class StepRow(QFrame):
+    """Linha de etapa do processamento (stepper vertical)."""
+
+    def __init__(self, number: int, title: str, hint: str, parent=None):
+        super().__init__(parent)
+        self.setObjectName("StepRow")
+        self._number = number
+        row = QHBoxLayout(self)
+        row.setContentsMargins(12, 8, 14, 8)
+        row.setSpacing(12)
+        self.badge = label(str(number), "StepBadge")
+        self.badge.setAlignment(Qt.AlignCenter)
+        self.badge.setFixedSize(26, 26)
+        row.addWidget(self.badge)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        self.title_lbl = label(title, "StepRowTitle")
+        self.hint_lbl = label(hint, "StepRowHint")
+        col.addWidget(self.title_lbl)
+        col.addWidget(self.hint_lbl)
+        row.addLayout(col, 1)
+        self.status_lbl = label("aguardando", "StepRowStatus")
+        row.addWidget(self.status_lbl)
+        self.set_state("idle")
+
+    def set_state(self, state: str, status: str | None = None):
+        self.setProperty("state", state)
+        self.badge.setText(
+            "✓" if state == "done" else ("!" if state == "error" else str(self._number))
+        )
+        default = {
+            "idle": "aguardando",
+            "active": "em andamento",
+            "done": "concluído",
+            "error": "falhou",
+        }.get(state, "")
+        self.status_lbl.setText(status if status is not None else default)
+        for widget in [self, *self.findChildren(QWidget)]:
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
+    def set_hint(self, text: str):
+        self.hint_lbl.setText(text)
+
+
+class Toast(QFrame):
+    """Aviso flutuante no rodape da janela, com acao opcional."""
+
+    def __init__(self, host: QWidget):
+        super().__init__(host)
+        self.setObjectName("Toast")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(14, 10, 10, 10)
+        row.setSpacing(12)
+        self.icon = label("↗", "ToastIcon")
+        row.addWidget(self.icon, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        self.title = label("", "ToastTitle", wrap=True)
+        self.body = label("", "ToastBody", wrap=True)
+        col.addWidget(self.title)
+        col.addWidget(self.body)
+        row.addLayout(col, 1)
+        self.action = QPushButton("")
+        self.action.setObjectName("Ghost")
+        self.action.setCursor(Qt.PointingHandCursor)
+        self.action.setVisible(False)
+        row.addWidget(self.action, 0, Qt.AlignVCenter)
+        close = QPushButton("✕")
+        close.setObjectName("IconBtn")
+        close.setCursor(Qt.PointingHandCursor)
+        close.setToolTip("Fechar aviso")
+        close.clicked.connect(self.hide)
+        row.addWidget(close, 0, Qt.AlignTop)
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self.hide)
+        self._action_cb = None
+        self.action.clicked.connect(self._run_action)
+        self.hide()
+
+    def _run_action(self):
+        cb = self._action_cb
+        self.hide()
+        if cb:
+            cb()
+
+    def show_message(
+        self,
+        title: str,
+        body: str = "",
+        icon: str = "↗",
+        action_text: str = "",
+        action=None,
+        ms: int = 9000,
+    ):
+        self.icon.setText(icon)
+        self.title.setText(title)
+        self.body.setText(body)
+        self.body.setVisible(bool(body))
+        self._action_cb = action
+        self.action.setText(action_text)
+        self.action.setVisible(bool(action_text and action))
+        self._reposition()
+        self.show()
+        self.raise_()
+        self._timer.start(ms)
+
+    def _reposition(self):
+        host = self.parentWidget()
+        if host is None:
+            return
+        width = min(760, max(320, host.width() - 40))
+        self.setFixedWidth(width)
+        lay = self.layout()
+        lay.activate()
+        height = lay.totalHeightForWidth(width) if lay.hasHeightForWidth() else lay.sizeHint().height()
+        self.setFixedHeight(max(height, 44))
+        x = (host.width() - width) // 2
+        y = host.height() - self.height() - 18
+        self.move(max(0, x), max(0, y))
+
+
+class FlowGrid(QWidget):
+    """Grade que ajusta o numero de colunas a largura disponivel."""
+
+    def __init__(self, min_col_width: int = 260, parent=None):
+        super().__init__(parent)
+        self.setObjectName("Root")
+        self._min_col = min_col_width
+        self._items: list[QWidget] = []
+        self._cols = 0
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(12)
+        self.grid.setVerticalSpacing(12)
+
+    def clear(self):
+        for w in self._items:
+            self.grid.removeWidget(w)
+            w.deleteLater()
+        self._items = []
+        while self.grid.count():
+            item = self.grid.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._cols = 0
+
+    def add(self, widget: QWidget):
+        self._items.append(widget)
+        self._relayout(force=True)
+
+    def widgets(self) -> list[QWidget]:
+        return list(self._items)
+
+    def _columns_for(self, width: int) -> int:
+        return max(1, min(4, (width + 12) // (self._min_col + 12)))
+
+    def _relayout(self, force: bool = False):
+        cols = self._columns_for(max(1, self.width()))
+        if not force and cols == self._cols:
+            return
+        self._cols = cols
+        for w in self._items:
+            self.grid.removeWidget(w)
+        for c in range(6):
+            self.grid.setColumnStretch(c, 1 if c < cols else 0)
+        for idx, w in enumerate(self._items):
+            self.grid.addWidget(w, idx // cols, idx % cols)
+        rows = (len(self._items) + cols - 1) // cols
+        self.grid.setRowStretch(rows, 1)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._relayout()
 
 
 class UnderlineTabs(QFrame):
@@ -445,7 +675,7 @@ class PhonePreviewWidget(QWidget):
         stage_rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
         stage_path = QPainterPath()
         stage_path.addRoundedRect(stage_rect, 8, 8)
-        painter.fillPath(stage_path, QColor("#111318"))
+        painter.fillPath(stage_path, QColor(theme.BG))
         painter.setPen(QPen(QColor(theme.LINE), 1))
         painter.drawPath(stage_path)
 
@@ -502,13 +732,7 @@ class PhonePreviewWidget(QWidget):
             painter.drawPath(phone_path)
             return
 
-        bg_grad = QLinearGradient(
-            phone_rect.topLeft(), phone_rect.bottomLeft()
-        )
-        bg_grad.setColorAt(0.0, _adj(QColor("#1D222D")))
-        bg_grad.setColorAt(0.5, _adj(QColor("#252B38")))
-        bg_grad.setColorAt(1.0, _adj(QColor("#14171F")))
-        painter.fillRect(phone_rect, bg_grad)
+        painter.fillRect(phone_rect, _adj(QColor(theme.PANEL_2)))
 
         # Faixas superior/inferior representando o fundo desfocado (blur)
         crop_h = min(ph, (pw * 9 / 16) * max(1.0, float(opts.zoom) * 0.85))
@@ -586,10 +810,7 @@ class PhonePreviewWidget(QWidget):
         painter.drawImage(rect, image, QRectF(sx, sy, sw, sh))
 
     def _draw_placeholder(self, painter: QPainter, rect: QRectF, label_text: str = ""):
-        grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0.0, QColor("#2A2A2A"))
-        grad.setColorAt(1.0, QColor("#1A1A1A"))
-        painter.fillRect(rect, grad)
+        painter.fillRect(rect, QColor(theme.PANEL_2))
         r = min(rect.width(), rect.height()) * 0.16
         cx, cy = rect.center().x(), rect.center().y()
         painter.setPen(Qt.NoPen)
@@ -691,6 +912,8 @@ class PhonePreviewWidget(QWidget):
 
         # mesma regra do render: o formato decide tamanho e posicao
         opts = caption_options(opts)
+        if not opts.captions_enabled and not self._in_settings:
+            return  # legendas desligadas: a previa da tela Cortar mostra so o video
         try:
             from gui.caption_preview import draw_caption
 
@@ -862,7 +1085,7 @@ class PresetCard(QFrame):
 
         if s_cfg.get("caption_glow"):
             sample.setStyleSheet(
-                f"background-color: #0F1115; color: #FFFFFF; "
+                f"background-color: {theme.BG}; color: #FFFFFF; "
                 f"font-family: '{font_family}'; font-weight: 900; font-size: 12px; "
                 "border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 5px; padding: 2px 6px;"
             )
@@ -874,9 +1097,9 @@ class PresetCard(QFrame):
                 "border-radius: 5px; padding: 2px 6px;"
             )
         else:
-            hl = readable_text_on("#12151C", hl)
+            hl = readable_text_on(theme.BG, hl)
             sample.setStyleSheet(
-                f"background-color: #12151C; color: {hl}; "
+                f"background-color: {theme.BG}; color: {hl}; "
                 f"font-family: '{font_family}'; font-weight: 800; font-size: 12px; "
                 f"border: 1px solid {theme.LINE}; border-radius: 5px; padding: 2px 6px;"
             )
@@ -899,7 +1122,7 @@ class PresetCard(QFrame):
             self.setStyleSheet(
                 "QFrame#PresetCard { "
                 f"background-color: {theme.ACCENT_SOFT}; "
-                f"border: 1.5px solid {theme.ACCENT}; "
+                f"border: 1px solid {theme.ACCENT}; "
                 "border-radius: 6px; } "
                 "QFrame#PresetCard:focus { "
                 f"border: 2px solid {theme.ACCENT_TEXT}; }}"
@@ -984,10 +1207,11 @@ class LayoutSchematic(QWidget):
         "image": "imagem",
     }
 
-    def __init__(self, layout, parent=None):
+    def __init__(self, layout, parent=None, size: tuple[int, int] = (46, 82)):
         super().__init__(parent)
         self._layout = layout
-        self.setFixedSize(46, 82)
+        self._show_names = size[0] >= 40
+        self.setFixedSize(*size)
 
     def paintEvent(self, _event):  # noqa: N802
         painter = QPainter(self)
@@ -1010,8 +1234,9 @@ class LayoutSchematic(QWidget):
                 painter.fillRect(rect, QColor("#262626"))
                 area = QRectF(rect.left() + 2, rect.center().y() - 12, rect.width() - 4, 24)
             painter.fillRect(area, color)
-            painter.setPen(QColor("#121212") if slot.kind in ("text", "image") else QColor("#D6D3D1"))
-            painter.drawText(area, Qt.AlignCenter, self.NAMES.get(slot.kind, slot.kind))
+            if self._show_names:
+                painter.setPen(QColor("#121212") if slot.kind in ("text", "image") else QColor("#D6D3D1"))
+                painter.drawText(area, Qt.AlignCenter, self.NAMES.get(slot.kind, slot.kind))
             y += h
         painter.setClipping(False)
         painter.setPen(QPen(QColor(theme.LINE_STRONG), 1))
@@ -1107,6 +1332,107 @@ class LayoutGrid(QWidget):
     def select_layout(self, layout_id: str):
         for lid, card in self.cards.items():
             card.set_selected(lid == layout_id)
+
+
+class _SelectableCard(QFrame):
+    """Base de cartao selecionavel por clique, Enter ou Espaco."""
+
+    clicked = Signal(str)
+
+    def __init__(self, key: str, accessible: str, parent=None):
+        super().__init__(parent)
+        self.key = key
+        self._selected = False
+        self.setObjectName("OptionCard")
+        self.setProperty("selected", "false")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+        self.setAccessibleName(accessible)
+
+    def set_selected(self, selected: bool):
+        self._selected = bool(selected)
+        self.setProperty("selected", "true" if self._selected else "false")
+        for widget in [self, *self.findChildren(QWidget)]:
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
+
+    def is_selected(self) -> bool:
+        return self._selected
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton and self.isEnabled():
+            self.setFocus(Qt.MouseFocusReason)
+            self.clicked.emit(self.key)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self.key)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class FormatOption(_SelectableCard):
+    """Cartao compacto de formato: esquema 9:16 + nome + etiqueta."""
+
+    def __init__(self, layout, parent=None):
+        super().__init__(layout.id, f"Formato {layout.name}", parent)
+        self.setToolTip(layout.description)
+        self.setFixedHeight(56)
+        row = QHBoxLayout(self)
+        row.setContentsMargins(8, 6, 10, 6)
+        row.setSpacing(10)
+        row.addWidget(LayoutSchematic(layout, size=(24, 42)), 0, Qt.AlignVCenter)
+        col = QVBoxLayout()
+        col.setSpacing(1)
+        self.name_lbl = ElidedLabel(layout.name, "OptionName")
+        col.addWidget(self.name_lbl)
+        tag = layout.tag + (" · precisa de imagem" if layout.requires else "")
+        col.addWidget(label(tag, "OptionTag"))
+        row.addLayout(col, 1)
+
+
+class CompactPresetCard(_SelectableCard):
+    """Cartao compacto de estilo de legenda: nome + amostra."""
+
+    def __init__(self, preset, parent=None):
+        super().__init__(preset.id, f"Estilo de legenda {preset.name}", parent)
+        self.setToolTip(preset.description)
+        self.setFixedHeight(76)
+        col = QVBoxLayout(self)
+        col.setContentsMargins(8, 7, 8, 8)
+        col.setSpacing(6)
+        col.addWidget(ElidedLabel(preset.name, "OptionName"))
+        strip = QLabel(preset.sample_text)
+        strip.setAlignment(Qt.AlignCenter)
+        strip.setFixedHeight(34)
+        s_cfg = preset.settings
+        fg = s_cfg.get("caption_text_color", "#FFFFFF")
+        hl = s_cfg.get("caption_highlight_color", "#7C3AED")
+        opacity = float(s_cfg.get("caption_highlight_opacity", 0.0))
+        family = s_cfg.get("caption_font", "Arial")
+        if s_cfg.get("caption_glow"):
+            word = (
+                f"color:#FFFFFF; font-family:'{family}'; font-weight:900; font-size:12px; "
+                "border:1px solid rgba(255,255,255,0.35); border-radius:4px; padding:2px 6px;"
+            )
+        elif opacity > 0.05:
+            word = (
+                f"background-color:{hl}; color:{readable_text_on(hl, fg)}; font-family:'{family}'; "
+                "font-weight:800; font-size:12px; border-radius:4px; padding:2px 6px;"
+            )
+        else:
+            word = (
+                f"color:{readable_text_on('#0B0B0B', hl)}; font-family:'{family}'; "
+                "font-weight:800; font-size:13px;"
+            )
+        strip.setText(
+            f"<span style=\"{word}\">&nbsp;{preset.sample_text}&nbsp;</span>"
+        )
+        strip.setTextFormat(Qt.RichText)
+        strip.setObjectName("PresetStrip")
+        col.addWidget(strip)
 
 
 class CollapsibleBox(QWidget):

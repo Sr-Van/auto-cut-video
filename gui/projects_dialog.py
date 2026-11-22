@@ -1,4 +1,4 @@
-"""Painel e diálogo de Projetos finalizados, exibidos em formato sanfona (accordion).
+"""Projetos finalizados: lista à esquerda, cortes do projeto à direita.
 
 Suporta uso embarcado na janela principal (`embedded=True`) e uso como
 diálogo autônomo (`ProjectsDialog(registry_path=...)`).
@@ -6,8 +6,6 @@ diálogo autônomo (`ProjectsDialog(registry_path=...)`).
 
 from __future__ import annotations
 
-import subprocess
-import sys
 import webbrowser
 from datetime import datetime
 from pathlib import Path
@@ -15,11 +13,9 @@ from pathlib import Path
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
@@ -28,14 +24,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from gui.widgets import ElidedLabel, flash_button, label, separator
+from gui.widgets import ElidedLabel, FlowGrid, Segmented, label, separator
 from utils.report import (
     delete_project,
     load_projects_registry,
     load_report,
+    project_folder_missing,
+    remove_missing_projects,
     update_clip_published,
 )
 from utils.timefmt import hhmmss_to_seconds
+
+YOUTUBE_UPLOAD_URL = "https://www.youtube.com/upload"
+TIKTOK_UPLOAD_URL = "https://www.tiktok.com/tiktokstudio/upload?from=webapp&tab=video"
+
+FILTER_ALL, FILTER_PENDING, FILTER_PUBLISHED = 0, 1, 2
 
 
 def reveal_in_explorer(path: str | Path) -> None:
@@ -52,32 +55,30 @@ def reveal_in_explorer(path: str | Path) -> None:
 
 
 def open_upload_pages(path: str = "", reveal: bool = True) -> None:
-    """Abre YouTube e TikTok Studio no navegador padrão, copia o caminho do corte e abre a pasta onde o vídeo está."""
-    if path:
+    """Abre YouTube e TikTok Studio no navegador e mostra o corte na pasta.
+
+    Não mexe na área de transferência: o usuário pode ter acabado de copiar
+    o título e a descrição do corte.
+    """
+    if path and reveal:
         try:
             resolved_path = Path(path).resolve()
             if resolved_path.exists():
-                QApplication.clipboard().setText(str(resolved_path))
-                if reveal:
-                    reveal_in_explorer(resolved_path)
+                reveal_in_explorer(resolved_path)
             elif resolved_path.parent.exists():
-                QApplication.clipboard().setText(str(resolved_path))
-                if reveal:
-                    reveal_in_explorer(resolved_path.parent)
+                reveal_in_explorer(resolved_path.parent)
         except Exception:
             pass
-    webbrowser.open_new_tab("https://www.youtube.com/upload")
-    webbrowser.open_new_tab(
-        "https://www.tiktok.com/tiktokstudio/upload?from=webapp&tab=video"
-    )
+    webbrowser.open_new_tab(YOUTUBE_UPLOAD_URL)
+    webbrowser.open_new_tab(TIKTOK_UPLOAD_URL)
 
 
-def _format_created_at(iso_str: str) -> str:
+def _format_created_at(iso_str: str, short: bool = False) -> str:
     if not iso_str:
         return "—"
     try:
         dt = datetime.fromisoformat(str(iso_str))
-        return dt.strftime("%d/%m/%Y · %H:%M")
+        return dt.strftime("%d/%m" if short else "%d/%m/%Y · %H:%M")
     except ValueError:
         return str(iso_str)
 
@@ -106,359 +107,208 @@ def update_published_button_ui(button: QPushButton, published: bool) -> None:
     button.style().polish(button)
 
 
-class ProjectAccordionItem(QFrame):
-    """Item sanfona (accordion) representando um projeto finalizado."""
+def _report_path_of(project: dict) -> str:
+    report_path = str(project.get("report_path") or "")
+    project_dir = str(project.get("project_dir") or "")
+    if not report_path and project_dir:
+        report_path = str(Path(project_dir) / "relatorio.json")
+    return report_path
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+class ProjectRow(QFrame):
+    """Linha compacta da lista de projetos."""
+
+    clicked = Signal(object)
+
+    def __init__(self, project: dict, clips: list[dict], parent=None):
+        super().__init__(parent)
+        self.project = dict(project)
+        self.clips = clips
+        self.missing = project_folder_missing(project)
+        self.published = sum(1 for c in clips if c.get("published"))
+        self.total = len(clips) or int(project.get("clips_count", 0) or 0)
+        self.setObjectName("ProjectRow")
+        self.setProperty("selected", "false")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        col = QVBoxLayout(self)
+        col.setContentsMargins(14, 9, 12, 9)
+        col.setSpacing(3)
+        name = str(project.get("video_name") or "Projeto sem nome")
+        self.title = ElidedLabel(name, "ProjectRowTitle")
+        col.addWidget(self.title)
+        date = _format_created_at(str(project.get("created_at") or ""), short=True)
+        meta = (
+            f"{date} · {_plural(self.total, 'corte', 'cortes')} · "
+            f"{self.published} de {self.total} publicados"
+        )
+        if self.missing:
+            meta = f"{date} · pasta não encontrada"
+        meta_lbl = label(meta, "ProjectRowMeta")
+        if self.missing:
+            meta_lbl.setProperty("missing", "true")
+        col.addWidget(meta_lbl)
+
+    def has_pending(self) -> bool:
+        return not self.missing and self.published < self.total
+
+    def is_fully_published(self) -> bool:
+        return not self.missing and self.total > 0 and self.published >= self.total
+
+    def set_selected(self, selected: bool):
+        self.setProperty("selected", "true" if selected else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self)
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space):
+            self.clicked.emit(self)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class ProjectDetail(QWidget):
+    """Detalhe de um projeto: metadados, ações e galeria de cortes."""
 
     project_deleted = Signal(str)
     clip_published_changed = Signal(str, int, bool)
+    counts_changed = Signal()
 
-    def __init__(
-        self,
-        project: dict,
-        expanded: bool = False,
-        registry_path: str | Path | None = None,
-        parent: QWidget | None = None,
-    ):
+    def __init__(self, registry_path=None, parent=None):
         super().__init__(parent)
-        self.project = dict(project)
+        self.setObjectName("Root")
         self.registry_path = registry_path
-        self._expanded = bool(expanded)
-        self.setObjectName("ProjectAccordion")
+        self.project: dict | None = None
+        self.report_path = ""
+        self.clip_cards = []
 
-        self.root_layout = QVBoxLayout(self)
-        self.root_layout.setContentsMargins(0, 0, 0, 0)
-        self.root_layout.setSpacing(0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 18, 24, 18)
+        root.setSpacing(10)
 
-        # --- Botão cabeçalho da sanfona
-        self.header_button = QPushButton()
-        self.header_button.setObjectName("ProjectHeaderBtn")
-        self.header_button.setCursor(Qt.PointingHandCursor)
-        self.header_button.clicked.connect(self.toggle)
-        self.header_button.setMinimumHeight(44)
-        # Titulo elidido + metadados fixos: titulos longos nao empurram o layout.
-        header_row = QHBoxLayout(self.header_button)
-        header_row.setContentsMargins(16, 0, 16, 0)
-        header_row.setSpacing(12)
-        self.header_arrow = label("▸", "ProjectHeaderArrow")
-        self.header_title = ElidedLabel("", "ProjectHeaderTitle")
-        self.header_meta = label("", "ProjectHeaderMeta")
-        for w in (self.header_arrow, self.header_title, self.header_meta):
-            w.setAttribute(Qt.WA_TransparentForMouseEvents)
-        header_row.addWidget(self.header_arrow)
-        header_row.addWidget(self.header_title, 1)
-        header_row.addWidget(self.header_meta)
-        self.root_layout.addWidget(self.header_button)
+        self.title = label("", "DetailTitle", wrap=True)
+        root.addWidget(self.title)
+        self.meta = label("", "Muted")
+        root.addWidget(self.meta)
+        self.path = ElidedLabel("", "ClipPath")
+        root.addWidget(self.path)
 
-        # --- Área de conteúdo expansível
-        self.content_area = QWidget()
-        self.content_layout = QVBoxLayout(self.content_area)
-        self.content_layout.setContentsMargins(16, 0, 16, 14)
-        self.content_layout.setSpacing(10)
-        self.root_layout.addWidget(self.content_area)
-
-        self._build_content()
-        self._sync_ui()
-
-    def _build_content(self) -> None:
-        while self.content_layout.count():
-            item = self.content_layout.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-        self.content_layout.addWidget(separator())
-
-        project_dir = str(self.project.get("project_dir") or "")
-        report_path = str(self.project.get("report_path") or "")
-        if not report_path and project_dir:
-            report_path = str(Path(project_dir) / "relatorio.json")
-
-        clips = load_report(report_path) if report_path else []
-        published_count = sum(1 for c in clips if c.get("published"))
-
-        # --- Barra de metadados e ações do projeto
-        meta_row = QHBoxLayout()
-        meta_row.setSpacing(10)
-
-        meta_info = QVBoxLayout()
-        meta_info.setSpacing(2)
-        created_str = _format_created_at(
-            str(self.project.get("created_at") or "")
-        )
-        avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
-        clips_count = int(self.project.get("clips_count", len(clips)) or 0)
-        summary_txt = (
-            f"Concluído em {created_str}  ·  "
-            f"{clips_count} cortes  ·  "
-            f"Nota média: {avg_score:.1f}/10  ·  "
-            f"Publicados: {published_count}/{len(clips)}"
-        )
-        self.meta_summary_label = label(summary_txt, "FieldLabel", wrap=True)
-        meta_info.addWidget(self.meta_summary_label)
-
-        dir_lbl = label(project_dir or "—", "FieldHint", wrap=True)
-        meta_info.addWidget(dir_lbl)
-        meta_row.addLayout(meta_info, 1)
-
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.open_folder_button = QPushButton("Abrir pasta")
         self.open_folder_button.setObjectName("Ghost")
         self.open_folder_button.setCursor(Qt.PointingHandCursor)
         self.open_folder_button.clicked.connect(self.open_folder)
-        meta_row.addWidget(self.open_folder_button, 0, Qt.AlignVCenter)
+        actions.addWidget(self.open_folder_button)
+        actions.addStretch(1)
+        self.delete_button = QPushButton("Excluir projeto…")
+        self.delete_button.setObjectName("DangerLink")
+        self.delete_button.setCursor(Qt.PointingHandCursor)
+        self.delete_button.clicked.connect(self.confirm_and_delete)
+        actions.addWidget(self.delete_button)
+        root.addLayout(actions)
 
-        self.delete_project_button = QPushButton("Excluir projeto")
-        self.delete_project_button.setObjectName("Danger")
-        self.delete_project_button.setCursor(Qt.PointingHandCursor)
-        self.delete_project_button.clicked.connect(self.confirm_and_delete)
-        meta_row.addWidget(self.delete_project_button, 0, Qt.AlignVCenter)
+        root.addWidget(separator())
+        self.count_line = label("", "SectionTitle")
+        root.addWidget(self.count_line)
 
-        meta_holder = QWidget()
-        meta_holder.setLayout(meta_row)
-        self.content_layout.addWidget(meta_holder)
+        self.notice = label("", "ResultsEmpty", wrap=True)
+        self.notice.setAlignment(Qt.AlignCenter)
+        self.notice.setVisible(False)
+        root.addWidget(self.notice)
 
-        # --- Lista de cortes
-        self.clips_container = QWidget()
-        self.clips_layout = QVBoxLayout(self.clips_container)
-        self.clips_layout.setContentsMargins(0, 2, 0, 0)
-        self.clips_layout.setSpacing(6)
+        self.grid = FlowGrid(min_col_width=240)
+        root.addWidget(self.grid)
+        root.addStretch(1)
+
+    def show_project(self, project: dict | None, empty_text: str = ""):
+        self.project = dict(project) if project else None
+        self.grid.clear()
+        self.clip_cards = []
+        has = project is not None
+        for w in (self.open_folder_button, self.delete_button, self.path, self.meta):
+            w.setVisible(has)
+        if not has:
+            self.title.setText("Nenhum projeto selecionado")
+            self.count_line.setText("")
+            self.notice.setText(empty_text or "Escolha um projeto na lista ao lado.")
+            self.notice.setVisible(True)
+            return
+
+        self.report_path = _report_path_of(project)
+        clips = load_report(self.report_path) if self.report_path else []
+        name = str(project.get("video_name") or "Projeto sem nome")
+        self.title.setText(name)
+        avg = float(project.get("average_viral_score", 0.0) or 0.0)
+        self.meta.setText(
+            f"Concluído em {_format_created_at(str(project.get('created_at') or ''))}"
+            f"  ·  Nota média {avg:.1f}/10"
+        )
+        project_dir = str(project.get("project_dir") or "")
+        self.path.setText(project_dir or "—")
+
+        if project_folder_missing(project):
+            self.count_line.setText("")
+            self.notice.setText(
+                "A pasta deste projeto não existe mais no disco (foi movida ou apagada). "
+                "Use “Remover da lista” à esquerda para limpar projetos assim."
+            )
+            self.notice.setVisible(True)
+            self.open_folder_button.setEnabled(False)
+            return
+        self.open_folder_button.setEnabled(True)
 
         if not clips:
-            empty_lbl = label(
-                "Nenhum corte registrado no relatório deste projeto.",
-                "ResultsEmpty",
-                wrap=True,
-            )
-            empty_lbl.setAlignment(Qt.AlignCenter)
-            self.clips_layout.addWidget(empty_lbl)
-        else:
-            for idx, clip in enumerate(clips):
-                self.clips_layout.addWidget(
-                    self._build_clip_row(idx, clip, report_path)
-                )
+            self.count_line.setText("")
+            self.notice.setText("Nenhum corte registrado no relatório deste projeto.")
+            self.notice.setVisible(True)
+            return
+        self.notice.setVisible(False)
 
-        self.content_layout.addWidget(self.clips_container)
+        from gui.clip_card import ClipCard, make_thumb_requester, resolve_clip_file
 
-    def _build_clip_row(
-        self, index: int, clip: dict, report_path: str
-    ) -> QWidget:
-        card = QFrame()
-        card.setObjectName("ProjectClipCard")
-        row = QVBoxLayout(card)
-        row.setContentsMargins(12, 9, 12, 9)
-        row.setSpacing(8)
+        host = self.window()
+        requester = getattr(host, "request_clip_thumb", None)
+        if requester is None:
+            requester = getattr(self, "_own_requester", None)
+            if requester is None:
+                requester = self._own_requester = make_thumb_requester(self)
+        for idx, clip in enumerate(clips):
+            path = resolve_clip_file(clip, report_path=self.report_path)
+            card = ClipCard(clip, path, idx, thumb_requester=requester)
+            card.published_changed.connect(self._on_published_changed)
+            self.clip_cards.append(card)
+            self.grid.add(card)
+        self._update_count_line()
 
-        left = QVBoxLayout()
-        left.setSpacing(3)
-
-        kicker = QHBoxLayout()
-        kicker.setSpacing(6)
-        score_val = clip.get("viral_score", "—")
-        score_lbl = label(f"{score_val}/10", "ClipScore")
-        try:
-            if float(score_val) < 8.0:
-                score_lbl.setProperty("tier", "mid")
-        except (TypeError, ValueError):
-            pass
-        kicker.addWidget(score_lbl)
-        kicker.addWidget(label(str(clip.get("category") or "CORTE"), "ClipCat"))
-        kicker.addWidget(
-            label(
-                format_clip_interval(
-                    clip.get("start", "—"), clip.get("end", "—")
-                ),
-                "ClipTime",
-            )
-        )
-        kicker.addStretch(1)
-        left.addLayout(kicker)
-
-        title_lbl = label(
-            clip.get("title") or f"Corte #{index + 1}", "ClipTitle", wrap=True
-        )
-        left.addWidget(title_lbl)
-
-        hook_text = clip.get("hook_text")
-        if hook_text:
-            left.addWidget(label(f"“{hook_text}”", "ClipHook", wrap=True))
-        analysis = clip.get("analysis") or clip.get("justification")
-        if analysis:
-            left.addWidget(label(str(analysis), "ClipAnalysis", wrap=True))
-
-        file_path = str(clip.get("file") or "")
-        if file_path and not Path(file_path).is_absolute() and report_path:
-            file_path = str((Path(report_path).parent / file_path).resolve())
-        elif not file_path and report_path:
-            file_path = str(Path(report_path).parent.resolve())
-
-        file_exists = bool(file_path) and Path(file_path).is_file()
-        if file_path:
-            fname = ElidedLabel(Path(file_path).name, "ClipPath")
-            fname.setToolTip(file_path)
-            left.addWidget(fname)
-            if not file_exists and Path(file_path).suffix:
-                left.addWidget(
-                    label(
-                        "Arquivo MP4 não encontrado (movido ou excluído).",
-                        "FieldHint",
-                    )
-                )
-
-        top = QHBoxLayout()
-        top.setSpacing(12)
-        if file_exists:
-            thumb = QPushButton(f"#{index + 1}")
-            thumb.setObjectName("ResultMedia")
-            thumb.setFixedSize(54, 96)
-            thumb.setCursor(Qt.PointingHandCursor)
-            thumb.setToolTip(f"Assistir {file_path}")
-            thumb.clicked.connect(
-                lambda _=False, p=file_path: QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(str(p))
-                )
-            )
-            host = self.window()
-            if hasattr(host, "request_clip_thumb"):
-                host.request_clip_thumb(thumb, file_path, f"#{index + 1}")
-            else:
-                self._request_thumb(thumb, file_path, f"#{index + 1}")
-            top.addWidget(thumb, 0, Qt.AlignTop)
-        top.addLayout(left, 1)
-        row.addLayout(top)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(6)
-
-        if file_path and Path(file_path).is_file():
-            open_mp4 = QPushButton("▶ Assistir")
-            open_mp4.setObjectName("Ghost")
-            open_mp4.setCursor(Qt.PointingHandCursor)
-            open_mp4.clicked.connect(
-                lambda _=False, p=file_path: QDesktopServices.openUrl(
-                    QUrl.fromLocalFile(str(p))
-                )
-            )
-            actions.addWidget(open_mp4)
-
-            copy_btn = QPushButton("Copiar caminho")
-            copy_btn.setObjectName("Ghost")
-            copy_btn.setCursor(Qt.PointingHandCursor)
-            copy_btn.clicked.connect(
-                lambda _=False, p=file_path, b=copy_btn: (
-                    QApplication.clipboard().setText(str(p)),
-                    flash_button(b, "✓ Copiado"),
-                )
-            )
-            actions.addWidget(copy_btn)
-
-        post_btn = QPushButton("Postar")
-        post_btn.setObjectName("Ghost")
-        post_btn.setCursor(Qt.PointingHandCursor)
-        post_btn.setToolTip(
-            "Abre YouTube e TikTok Studio no navegador, copia o caminho e abre a pasta do corte para arrastar"
-        )
-        post_btn.clicked.connect(
-            lambda _=False, p=file_path: open_upload_pages(p)
-        )
-        actions.addWidget(post_btn)
-
-        pub_btn = QPushButton()
-        pub_btn.setObjectName("PublishedBtn")
-        pub_btn.setCheckable(True)
-        pub_btn.setCursor(Qt.PointingHandCursor)
-        update_published_button_ui(pub_btn, bool(clip.get("published", False)))
-        pub_btn.clicked.connect(
-            lambda checked, i=index, b=pub_btn, rp=report_path: self._on_toggle_published(
-                rp, i, checked, b
-            )
-        )
-        actions.addWidget(pub_btn)
-        actions.addStretch(1)
-
-        row.addLayout(actions)
-        return card
-
-    def _request_thumb(self, button, clip_path: str, label_text: str):
-        """Fallback quando o dialogo roda sozinho (sem a janela principal)."""
-        from gui.thumbnails import FrameLoader, poster_pixmap
-        from PySide6.QtGui import QIcon
-
-        loader = getattr(self, "_frames", None)
-        if loader is None:
-            loader = self._frames = FrameLoader(self)
-            self._thumb_targets = {}
-
-            def done(key, jpg):
-                for b, text in self._thumb_targets.pop(key, []):
-                    if not jpg:
-                        continue
-                    try:
-                        b.setIcon(QIcon(poster_pixmap(
-                            jpg, b.width(), b.height(), text, b.devicePixelRatioF()
-                        )))
-                        b.setIconSize(b.size())
-                        b.setText("")
-                    except RuntimeError:
-                        pass
-
-            loader.loaded.connect(done)
-        self._thumb_targets.setdefault("clip:" + clip_path, []).append(
-            (button, label_text)
-        )
-        loader.request_clip_thumb(clip_path)
-
-    def _on_toggle_published(
-        self,
-        report_path: str,
-        clip_index: int,
-        published: bool,
-        button: QPushButton,
-    ) -> None:
-        rows = update_clip_published(report_path, clip_index, published)
-        update_published_button_ui(button, published)
-
-        published_count = sum(1 for c in rows if c.get("published"))
-        created_str = _format_created_at(
-            str(self.project.get("created_at") or "")
-        )
-        avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
-        clips_count = int(self.project.get("clips_count", len(rows)) or 0)
-        self.meta_summary_label.setText(
-            f"Concluído em {created_str}  ·  "
-            f"{clips_count} cortes  ·  "
-            f"Nota média: {avg_score:.1f}/10  ·  "
-            f"Publicados: {published_count}/{len(rows)}"
-        )
-        self.clip_published_changed.emit(
-            report_path, clip_index, bool(published)
+    def _update_count_line(self):
+        total = len(self.clip_cards)
+        pub = sum(1 for c in self.clip_cards if c.is_published())
+        self.count_line.setText(
+            f"{_plural(total, 'corte', 'cortes')}  ·  {pub} publicado"
+            f"{'s' if pub != 1 else ''}  ·  {total - pub} aguardando publicação"
         )
 
-    def toggle(self) -> None:
-        self.set_expanded(not self._expanded)
-
-    def set_expanded(self, expanded: bool) -> None:
-        self._expanded = bool(expanded)
-        self._sync_ui()
-
-    def is_expanded(self) -> bool:
-        return self._expanded
-
-    def _sync_ui(self) -> None:
-        arrow = "▾" if self._expanded else "▸"
-        video_name = str(self.project.get("video_name") or "Projeto sem nome")
-        clips_count = int(self.project.get("clips_count", 0) or 0)
-        avg_score = float(self.project.get("average_viral_score", 0.0) or 0.0)
-        self.header_arrow.setText(arrow)
-        self.header_title.setText(video_name)
-        self.header_meta.setText(
-            f"{clips_count} cortes  ·  Nota média {avg_score:.1f}/10"
-        )
-        self.content_area.setVisible(self._expanded)
-        self.setProperty("expanded", "true" if self._expanded else "false")
-        self.style().unpolish(self)
-        self.style().polish(self)
+    def _on_published_changed(self, index: int, published: bool):
+        if self.report_path:
+            update_clip_published(self.report_path, index, published)
+        self._update_count_line()
+        self.clip_published_changed.emit(self.report_path, index, published)
+        self.counts_changed.emit()
 
     def open_folder(self) -> None:
-        project_dir = str(self.project.get("project_dir") or "")
+        project_dir = str((self.project or {}).get("project_dir") or "")
         if project_dir and Path(project_dir).exists():
             QDesktopServices.openUrl(QUrl.fromLocalFile(project_dir))
         else:
@@ -469,36 +319,37 @@ class ProjectAccordionItem(QFrame):
             )
 
     def confirm_and_delete(self, skip_confirm: bool = False) -> bool:
+        if not self.project:
+            return False
         project_dir = str(self.project.get("project_dir") or "")
         video_name = str(self.project.get("video_name") or project_dir)
         if not skip_confirm:
             reply = QMessageBox.question(
                 self,
                 "Excluir projeto",
-                f"Tem certeza que deseja excluir o projeto “{video_name}”?\n\n"
-                f"Isso excluirá TODA A PASTA e todos os clipes em:\n{project_dir}",
+                f"Excluir o projeto “{video_name}”?\n\n"
+                f"Isso apaga A PASTA INTEIRA e todos os cortes em:\n{project_dir}\n\n"
+                "Não dá para desfazer.",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
                 return False
-
         try:
             delete_project(project_dir, registry_path=self.registry_path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(
                 self,
                 "Erro ao excluir",
                 f"Não foi possível excluir a pasta do projeto:\n{exc}",
             )
             return False
-
         self.project_deleted.emit(project_dir)
         return True
 
 
 class ProjectsDialog(QDialog):
-    """Biblioteca de projetos finalizados ordenados do mais recente ao mais antigo."""
+    """Biblioteca de projetos finalizados (lista + detalhe)."""
 
     project_deleted = Signal(str)
     clip_published_changed = Signal(str, int, bool)
@@ -515,73 +366,92 @@ class ProjectsDialog(QDialog):
             self.setWindowFlags(Qt.Widget)
         else:
             self.setWindowTitle("Projetos")
-            self.resize(880, 680)
-            self.setMinimumSize(700, 520)
+            self.resize(1100, 700)
+            self.setMinimumSize(820, 520)
 
         self.registry_path = registry_path
-        self.accordion_items: list[ProjectAccordionItem] = []
+        self.project_rows: list[ProjectRow] = []
+        self._selected_dir: str | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- Barra superior com filtro e contador
-        head = QFrame()
-        head.setObjectName("SettingsHead")
-        head_layout = QHBoxLayout(head)
-        head_layout.setContentsMargins(20, 14, 20, 14)
-        head_layout.setSpacing(12)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
 
-        titles = QVBoxLayout()
-        titles.setSpacing(2)
-        titles.addWidget(label("Projetos finalizados", "PanelTitle"))
-        titles.addWidget(
-            label(
-                "Expanda um projeto para assistir aos cortes, marcar como publicado ou abrir a pasta.",
-                "Faint",
-            )
-        )
-        head_layout.addLayout(titles, 1)
+        # --- Coluna da lista
+        side = QFrame()
+        side.setObjectName("ProjectsSide")
+        side.setFixedWidth(360)
+        side_l = QVBoxLayout(side)
+        side_l.setContentsMargins(14, 14, 0, 0)
+        side_l.setSpacing(10)
 
+        top = QVBoxLayout()
+        top.setContentsMargins(0, 0, 14, 0)
+        top.setSpacing(8)
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Filtrar por nome do vídeo...")
+        self.search_input.setPlaceholderText("Buscar projeto…")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.setFixedWidth(220)
         self.search_input.textChanged.connect(self._apply_filter)
-        head_layout.addWidget(self.search_input, 0, Qt.AlignVCenter)
+        top.addWidget(self.search_input)
 
-        self.count_pill = label("0 projetos", "MiniPill")
-        head_layout.addWidget(self.count_pill, 0, Qt.AlignVCenter)
+        self.filter_seg = Segmented(["Todos", "A publicar", "Publicados"])
+        self.filter_seg.setObjectName("FilterSeg")
+        self.filter_seg.changed.connect(lambda _i: self._apply_filter())
+        top.addWidget(self.filter_seg)
 
-        refresh_btn = QPushButton("Atualizar")
-        refresh_btn.setObjectName("Ghost")
-        refresh_btn.setCursor(Qt.PointingHandCursor)
-        refresh_btn.clicked.connect(self.refresh_projects)
-        head_layout.addWidget(refresh_btn, 0, Qt.AlignVCenter)
+        self.missing_row = QFrame()
+        mr = QHBoxLayout(self.missing_row)
+        mr.setContentsMargins(0, 0, 0, 0)
+        mr.setSpacing(8)
+        self.missing_label = label("", "WarnText")
+        mr.addWidget(self.missing_label, 1)
+        self.clean_button = QPushButton("Remover da lista")
+        self.clean_button.setObjectName("Ghost")
+        self.clean_button.setCursor(Qt.PointingHandCursor)
+        self.clean_button.setToolTip(
+            "Tira da lista os projetos cuja pasta não existe mais. Nada é apagado do disco."
+        )
+        self.clean_button.clicked.connect(self.remove_missing)
+        mr.addWidget(self.clean_button)
+        top.addWidget(self.missing_row)
+        side_l.addLayout(top)
 
-        root.addWidget(head)
-
-        # --- Lista rolável
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-
+        list_scroll = QScrollArea()
+        list_scroll.setWidgetResizable(True)
+        list_scroll.setFrameShape(QScrollArea.NoFrame)
+        list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.list_host = QWidget()
-        self.list_host.setObjectName("Root")
+        self.list_host.setObjectName("ProjectsSideList")
         self.list_layout = QVBoxLayout(self.list_host)
-        self.list_layout.setContentsMargins(20, 16, 20, 18)
-        self.list_layout.setSpacing(10)
-        scroll.setWidget(self.list_host)
-        root.addWidget(scroll, 1)
+        self.list_layout.setContentsMargins(0, 0, 0, 12)
+        self.list_layout.setSpacing(0)
+        list_scroll.setWidget(self.list_host)
+        side_l.addWidget(list_scroll, 1)
+        body.addWidget(side)
 
-        # --- Rodapé apenas quando aberto como modal independente
+        # --- Detalhe
+        detail_scroll = QScrollArea()
+        detail_scroll.setWidgetResizable(True)
+        detail_scroll.setFrameShape(QScrollArea.NoFrame)
+        detail_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.detail = ProjectDetail(registry_path=registry_path)
+        self.detail.project_deleted.connect(self._on_project_deleted)
+        self.detail.clip_published_changed.connect(self.clip_published_changed)
+        self.detail.counts_changed.connect(self._refresh_counts_soft)
+        detail_scroll.setWidget(self.detail)
+        body.addWidget(detail_scroll, 1)
+        root.addLayout(body, 1)
+
         if not self.embedded:
             foot = QFrame()
             foot.setObjectName("Footer")
             foot_layout = QHBoxLayout(foot)
             foot_layout.setContentsMargins(20, 12, 20, 12)
             foot_layout.addStretch(1)
-
             close_btn = QPushButton("Fechar")
             close_btn.setObjectName("Primary")
             close_btn.setCursor(Qt.PointingHandCursor)
@@ -591,53 +461,132 @@ class ProjectsDialog(QDialog):
 
         self.refresh_projects()
 
+    # --- Dados ---------------------------------------------------------
     def refresh_projects(self) -> None:
         while self.list_layout.count():
             item = self.list_layout.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
-        self.accordion_items.clear()
+        self.project_rows = []
 
-        projects = load_projects_registry(self.registry_path)
-        total = len(projects)
-        self.count_pill.setText(
-            f"{total} projeto" if total == 1 else f"{total} projetos"
+        for proj in load_projects_registry(self.registry_path):
+            rp = _report_path_of(proj)
+            clips = load_report(rp) if rp and Path(rp).is_file() else []
+            row = ProjectRow(proj, clips, parent=self.list_host)
+            row.clicked.connect(self._on_row_clicked)
+            self.project_rows.append(row)
+            self.list_layout.addWidget(row)
+
+        self.empty_list = label("", "ListEmpty", wrap=True)
+        self.empty_list.setAlignment(Qt.AlignCenter)
+        self.list_layout.addWidget(self.empty_list)
+        self.list_layout.addStretch(1)
+        self._update_filter_labels()
+        self._apply_filter()
+
+    def _update_filter_labels(self):
+        rows = self.project_rows
+        self.filter_seg.set_label(0, f"Todos {len(rows)}")
+        self.filter_seg.set_label(
+            1, f"A publicar {sum(1 for r in rows if r.has_pending())}"
+        )
+        self.filter_seg.set_label(
+            2, f"Publicados {sum(1 for r in rows if r.is_fully_published())}"
+        )
+        missing = sum(1 for r in rows if r.missing)
+        self.missing_row.setVisible(missing > 0)
+        self.missing_label.setText(
+            f"⚠ {missing} sem pasta no disco"
         )
 
-        if not projects:
-            empty = label(
-                "Nenhum projeto finalizado ainda. Assim que você concluir um processamento, ele aparecerá aqui.",
-                "ResultsEmpty",
-                wrap=True,
-            )
-            empty.setAlignment(Qt.AlignCenter)
-            self.list_layout.addWidget(empty)
-            self.list_layout.addStretch(1)
+    def _refresh_counts_soft(self):
+        """Atualiza contadores sem reconstruir a lista (apos marcar publicado)."""
+        if not self.detail.project:
             return
+        target = str(self.detail.project.get("project_dir") or "")
+        for row in self.project_rows:
+            if str(row.project.get("project_dir") or "") == target:
+                row.published = sum(1 for c in self.detail.clip_cards if c.is_published())
+        self._update_filter_labels()
 
-        for idx, proj in enumerate(projects):
-            item = ProjectAccordionItem(
-                proj,
-                expanded=(idx == 0),
-                registry_path=self.registry_path,
-                parent=self.list_host,
+    def _matches(self, row: ProjectRow, query: str, mode: int) -> bool:
+        name = str(row.project.get("video_name") or "").lower()
+        if query and query not in name:
+            return False
+        if mode == FILTER_PENDING:
+            return row.has_pending()
+        if mode == FILTER_PUBLISHED:
+            return row.is_fully_published()
+        return True
+
+    def _apply_filter(self, *_args) -> None:
+        q = self.search_input.text().strip().lower()
+        mode = max(0, self.filter_seg.current())
+        visible = []
+        for row in self.project_rows:
+            ok = self._matches(row, q, mode)
+            row.setVisible(ok)
+            if ok:
+                visible.append(row)
+
+        if not self.project_rows:
+            msg = (
+                "Nenhum projeto ainda. Quando você gerar cortes de um vídeo, "
+                "o projeto aparece aqui."
             )
-            item.project_deleted.connect(self._on_project_deleted)
-            item.clip_published_changed.connect(self.clip_published_changed)
-            self.accordion_items.append(item)
-            self.list_layout.addWidget(item)
+        elif not visible:
+            msg = (
+                f"Nenhum projeto encontrado para “{self.search_input.text().strip()}”."
+                if q
+                else "Nenhum projeto neste filtro."
+            )
+        else:
+            msg = ""
+        self.empty_list.setText(msg)
+        self.empty_list.setVisible(bool(msg))
 
-        self.list_layout.addStretch(1)
-        if hasattr(self, "search_input") and self.search_input.text().strip():
-            self._apply_filter(self.search_input.text())
+        current = next(
+            (r for r in visible
+             if str(r.project.get("project_dir") or "") == self._selected_dir),
+            None,
+        )
+        if current is None and visible:
+            current = next((r for r in visible if not r.missing), visible[0])
+        self._select_row(current)
 
-    def _apply_filter(self, query: str) -> None:
-        q = query.strip().lower()
-        for item in self.accordion_items:
-            name = str(item.project.get("video_name") or "").lower()
-            item.setVisible(not q or q in name)
+    def _on_row_clicked(self, row: ProjectRow):
+        self._select_row(row)
+
+    def _select_row(self, row: ProjectRow | None):
+        self._selected_dir = str(row.project.get("project_dir") or "") if row else None
+        for r in self.project_rows:
+            r.set_selected(r is row)
+        if row is None:
+            self.detail.show_project(
+                None,
+                "Nenhum projeto ainda." if not self.project_rows
+                else "Nenhum projeto neste filtro.",
+            )
+        elif self.detail.project is None or str(
+            self.detail.project.get("project_dir") or ""
+        ) != self._selected_dir:
+            self.detail.show_project(row.project)
+
+    def select_project(self, index: int):
+        visible = [r for r in self.project_rows if not r.isHidden()]
+        if 0 <= index < len(visible):
+            self._select_row(visible[index])
+
+    def remove_missing(self) -> int:
+        removed = remove_missing_projects(self.registry_path)
+        self._selected_dir = None
+        self.detail.project = None
+        self.refresh_projects()
+        return removed
 
     def _on_project_deleted(self, project_dir: str) -> None:
         self.project_deleted.emit(project_dir)
+        self._selected_dir = None
+        self.detail.project = None
         self.refresh_projects()

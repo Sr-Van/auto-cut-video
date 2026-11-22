@@ -146,23 +146,31 @@ def slot_heights(layout: Layout, total_height: int) -> list[int]:
 def caption_options(options):
     """Copia das opcoes com tamanho e posicao da legenda ajustados ao formato.
 
-    O preset de legenda define o estilo; o formato decide onde a legenda cabe
-    sem cobrir o que importa (rosto, webcam, faixa de texto, imagem).
+    O preset de legenda define o estilo e a altura nos formatos de tela cheia;
+    nos formatos multi-slot, o formato posiciona a legenda dentro do slot dedicado
+    para nao cobrir o que importa (rosto, webcam, faixa de texto, imagem).
     """
     from core.options import ProcessingOptions
 
     layout = get_layout(getattr(options, "layout_id", DEFAULT_LAYOUT_ID))
     adjusted = ProcessingOptions.from_dict(options.to_dict())
-    heights = slot_heights(layout, int(options.height))
-    index = max(0, min(len(heights) - 1, layout.caption_slot))
-    slot_top = sum(heights[:index])
-    bottom = slot_top + heights[index] * max(0.05, min(1.0, layout.caption_anchor))
-    # escala tambem pela resolucao (presets foram pensados em 1080 de largura)
     res_scale = int(options.width) / 1080.0
     adjusted.caption_font_size = max(
         18, int(round(options.caption_font_size * layout.caption_scale * res_scale))
     )
-    adjusted.caption_margin_bottom = max(0, int(round(options.height - bottom)))
+
+    if len(layout.slots) == 1:
+        h_scale = int(options.height) / 1920.0
+        raw_margin = int(round(float(options.caption_margin_bottom) * h_scale))
+        adjusted.caption_margin_bottom = max(
+            0, min(max(0, int(options.height) - 24), raw_margin)
+        )
+    else:
+        heights = slot_heights(layout, int(options.height))
+        index = max(0, min(len(heights) - 1, layout.caption_slot))
+        slot_top = sum(heights[:index])
+        bottom = slot_top + heights[index] * max(0.05, min(1.0, layout.caption_anchor))
+        adjusted.caption_margin_bottom = max(0, int(round(options.height - bottom)))
     return adjusted
 
 

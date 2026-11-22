@@ -46,10 +46,12 @@ def _shrink(s, e, hook, total, max_duration):
 
 
 def _snap_end(ne, ns, cut_points, min_duration, max_duration, total):
-    cand = _snap(ne, cut_points)
-    cand = max(cand, ns + min_duration)
-    cand = min(cand, ns + max_duration, total)
-    return cand
+    lo = min(total, ns + min_duration)
+    hi = min(total, ns + max_duration)
+    candidates = [p for p in cut_points if lo <= p <= hi and abs(p - ne) <= 10.0]
+    if candidates:
+        return min(candidates, key=lambda p: abs(p - ne))
+    return max(lo, min(hi, ne))
 
 
 def normalize_clips(clips, segments, total_duration, min_duration, max_duration, pause_gap):
@@ -80,12 +82,16 @@ def normalize_clips(clips, segments, total_duration, min_duration, max_duration,
     for entry in expanded:
         if merged and entry["_s"] <= merged[-1]["_e"]:
             last = merged[-1]
-            last["_e"] = max(last["_e"], entry["_e"])
-            if entry.get("viral_score", 0) > last.get("viral_score", 0):
-                for key, value in entry.items():
-                    if key in ("start", "end", "_s", "_e"):
-                        continue
-                    last[key] = value
+            union_end = max(last["_e"], entry["_e"])
+            if union_end - last["_s"] <= max_duration:
+                last["_e"] = union_end
+                if entry.get("viral_score", 0) > last.get("viral_score", 0):
+                    for key, value in entry.items():
+                        if key in ("start", "end", "_s", "_e"):
+                            continue
+                        last[key] = value
+            elif entry.get("viral_score", 0) > last.get("viral_score", 0):
+                merged[-1] = entry
         else:
             merged.append(entry)
 
