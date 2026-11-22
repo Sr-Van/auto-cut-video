@@ -764,13 +764,17 @@ def apply_theme(app: QApplication):
     """Aplica paleta utilitária escura e folha de estilo limpa."""
     app.setStyle("Fusion")
 
-    sans = _pick_font(
-        ["Segoe UI Variable Text", "Inter", "Segoe UI"], "Segoe UI"
-    )
+    # JetBrainsMono Nerd Font como fonte única da interface; cai para a
+    # JetBrains Mono comum e depois para monoespaçadas do sistema.
+    jetbrains = [
+        "JetBrainsMono Nerd Font",
+        "JetBrainsMono NF",
+        "JetBrainsMono Nerd Font Mono",
+        "JetBrains Mono",
+    ]
+    mono = _pick_font([*jetbrains, "Cascadia Code"], "Consolas")
+    sans = mono
     serif = sans
-    mono = _pick_font(
-        ["JetBrains Mono", "Cascadia Code", "Consolas"], "Consolas"
-    )
 
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(BG))
