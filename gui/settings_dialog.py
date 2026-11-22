@@ -49,7 +49,7 @@ from gui.widgets import (
     PhonePreviewWidget,
     PresetGrid,
     Switch,
-    UnderlineTabs,
+    SideNav,
     label,
     separator,
 )
@@ -187,20 +187,34 @@ class SettingsDialog(QDialog):
             head_layout.addWidget(sub)
             root.addWidget(head)
 
-        # --- Sub-abas (Vídeo | Legenda | Cortes & IA)
+        # --- Navegação vertical por intenção (mesma ordem da tela Cortar)
         self._layout_id = options.layout_id
-        self.tabs = UnderlineTabs(["Vídeo", "Legenda", "Cortes & IA", "Formato"])
-        root.addWidget(self.tabs)
+        self.tabs = SideNav(
+            [
+                ("Formato", None),
+                ("Legenda", None),
+                ("Cortes", None),
+                ("Contas e IA", None),
+                None,
+                ("Avançado", "vídeo, Whisper"),
+            ]
+        )
 
         # --- Corpo rolável
         self.stack = QStackedWidget()
-        self.stack.addWidget(self._wrap_scroll(self._build_video_tab()))
+        self.stack.addWidget(self._build_format_tab())                         # 0
         # A aba Legenda tem rolagem propria: a previa 9:16 fica fixa ao lado.
-        self.stack.addWidget(self._build_caption_tab())
-        self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))
-        self.stack.addWidget(self._build_format_tab())
+        self.stack.addWidget(self._build_caption_tab())                        # 1
+        self.stack.addWidget(self._wrap_scroll(self._build_cuts_tab()))        # 2
+        self.stack.addWidget(self._wrap_scroll(self._build_ai_tab()))          # 3
+        self.stack.addWidget(self._wrap_scroll(self._build_advanced_tab()))    # 4
         self.tabs.changed.connect(self.stack.setCurrentIndex)
-        root.addWidget(self.stack, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self.tabs)
+        body.addWidget(self.stack, 1)
+        root.addLayout(body, 1)
 
         # --- Rodapé
         foot = QFrame()
@@ -240,6 +254,8 @@ class SettingsDialog(QDialog):
         self._load(options)
         self._connect_live_preview()
         self._refresh_preview()
+
+    PAGE_FORMAT, PAGE_CAPTION, PAGE_CUTS, PAGE_AI, PAGE_ADVANCED = range(5)
 
     def set_active_tab(self, index: int):
         self.tabs.set_current(index)
@@ -358,7 +374,7 @@ class SettingsDialog(QDialog):
 
         top_bar = QHBoxLayout()
         top_bar.setSpacing(12)
-        self.captions_enabled_toggle = Switch("Gerar legendas dinâmicas")
+        self.captions_enabled_toggle = Switch("Usar legendas")
         top_bar.addWidget(self.captions_enabled_toggle)
         top_bar.addStretch(1)
         self.preset_status_badge = label("Preset: TikTok Studio", "MiniPill")
@@ -787,14 +803,24 @@ class SettingsDialog(QDialog):
             if widget is not None:
                 widget.set_frame(image)
 
-    def _build_cuts_tab(self) -> QWidget:
+    def _page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
         pane = QWidget()
         pane.setObjectName("Root")
         layout = QVBoxLayout(pane)
-        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setContentsMargins(28, 22, 28, 22)
         layout.setSpacing(14)
+        layout.addWidget(label(title, "PageTitle"))
+        if subtitle:
+            layout.addWidget(label(subtitle, "Faint", wrap=True))
+        layout.addWidget(separator())
+        return pane, layout
 
-        layout.addWidget(label("Critérios de seleção (IA)", "SectionTitle"))
+    def _build_cuts_tab(self) -> QWidget:
+        pane, layout = self._page(
+            "Cortes",
+            "Quantos cortes gerar, de que tamanho e com que rigor. "
+            "Estes valores também aparecem na tela Cortar.",
+        )
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
@@ -803,116 +829,83 @@ class SettingsDialog(QDialog):
         self.max_clips = QSpinBox()
         self.max_clips.setRange(1, 50)
         grid1.addWidget(
-            _field_box("Máximo de clipes", self.max_clips, "1 – 50"), 0, 0
+            _field_box("Quantidade de cortes", self.max_clips, "máximo por vídeo · 1 – 50"), 0, 0
         )
 
         self.min_viral_score = QSpinBox()
         self.min_viral_score.setRange(1, 10)
         grid1.addWidget(
-            _field_box("Nota mínima viral", self.min_viral_score, "1 – 10"),
-            0,
-            1,
-        )
-
-        self.whisper_model = QComboBox()
-        for w_label, w_val in (
-            ("large · máxima precisão", "large"),
-            ("turbo · rápido e preciso", "turbo"),
-            ("medium · equilibrado", "medium"),
-            ("small · leve", "small"),
-            ("base · muito leve", "base"),
-            ("tiny · ultra rápido", "tiny"),
-        ):
-            self.whisper_model.addItem(w_label, w_val)
-        grid1.addWidget(
-            _field_box("Modelo Whisper", self.whisper_model), 0, 2
-        )
-
-        self.ai_model = AIModelPicker()
-        grid1.addWidget(
             _field_box(
-                "Modelo de IA",
-                self.ai_model,
-                "tentado primeiro; os outros ficam de reserva",
+                "Rigor da IA (nota mínima)",
+                self.min_viral_score,
+                "1 – 10 · padrão 8",
             ),
-            1,
             0,
             1,
-            3,
         )
-
-        layout.addLayout(grid1)
-        layout.addWidget(separator())
-        layout.addWidget(label("Duração e recorte", "SectionTitle"))
-
-        grid2 = QGridLayout()
-        grid2.setHorizontalSpacing(14)
-        grid2.setVerticalSpacing(12)
 
         self.min_clip_duration = QSpinBox()
         self.min_clip_duration.setRange(10, 180)
         self.min_clip_duration.setSingleStep(5)
+        self.min_clip_duration.setSuffix(" s")
         self.min_clip_duration.valueChanged.connect(
             self._on_min_duration_changed
         )
-        grid2.addWidget(
-            _field_box("Duração mínima", self.min_clip_duration, "10 – 180s"),
-            0,
+        grid1.addWidget(
+            _field_box("Duração mínima do corte", self.min_clip_duration, "10 – 180s"),
+            1,
             0,
         )
 
         self.max_clip_duration = QSpinBox()
         self.max_clip_duration.setRange(15, 300)
         self.max_clip_duration.setSingleStep(5)
+        self.max_clip_duration.setSuffix(" s")
         self.max_clip_duration.valueChanged.connect(
             self._on_max_duration_changed
         )
-        grid2.addWidget(
-            _field_box("Duração máxima", self.max_clip_duration, "15 – 300s"),
-            0,
-            1,
-        )
-
-        self.pause_gap = QDoubleSpinBox()
-        self.pause_gap.setRange(0.2, 10.0)
-        self.pause_gap.setSingleStep(0.1)
-        self.pause_gap.setDecimals(1)
-        grid2.addWidget(
-            _field_box("Pausa natural para corte", self.pause_gap, "0.2 – 10s"),
-            0,
-            2,
-        )
-
-        self.padding_s = QDoubleSpinBox()
-        self.padding_s.setRange(0.0, 30.0)
-        self.padding_s.setSingleStep(0.5)
-        self.padding_s.setDecimals(1)
-        grid2.addWidget(
-            _field_box("Margem de segurança (padding)", self.padding_s, "0 – 30s"),
-            1,
-            0,
-        )
-
-        self.max_workers = QSpinBox()
-        self.max_workers.setRange(1, 8)
-        grid2.addWidget(
-            _field_box("Workers de renderização", self.max_workers, "1 – 8"),
+        grid1.addWidget(
+            _field_box("Duração máxima do corte", self.max_clip_duration, "15 – 300s"),
             1,
             1,
         )
-
-        layout.addLayout(grid2)
+        layout.addLayout(grid1)
 
         self.review_before_render = Switch("Revisar cortes antes de renderizar")
         self.review_before_render.setToolTip(
             "Pausa após a análise de IA para você aprovar cortes e ajustar início/fim antes de renderizar"
         )
         layout.addWidget(self.review_before_render)
+
+        note = label(
+            "A IA seleciona trechos independentes que atinjam a nota mínima, até a quantidade escolhida. "
+            "Os cortes são ajustados automaticamente em pausas naturais da fala.",
+            "Note",
+            wrap=True,
+        )
+        layout.addWidget(note)
+        layout.addStretch(1)
+        return pane
+
+    def _build_ai_tab(self) -> QWidget:
+        pane, layout = self._page(
+            "Contas e IA",
+            "Qual modelo de IA escolhe os cortes e as chaves de acesso dos provedores.",
+        )
+
+        self.ai_model = AIModelPicker()
+        layout.addWidget(
+            _field_box(
+                "Modelo de IA",
+                self.ai_model,
+                "“Automático” alterna entre provedores e chaves quando um falha (recomendado)",
+            )
+        )
         layout.addWidget(separator())
         layout.addWidget(label("Chaves de API (.env)", "SectionTitle"))
 
         self.api_keys_list = QListWidget()
-        self.api_keys_list.setMaximumHeight(96)
+        self.api_keys_list.setMaximumHeight(120)
         self.api_keys_list.setToolTip("Chaves de API configuradas localmente no arquivo .env")
         layout.addWidget(self.api_keys_list)
 
@@ -947,14 +940,67 @@ class SettingsDialog(QDialog):
         self.api_key_status = label("", "Muted", wrap=True)
         layout.addWidget(self.api_key_status)
         self._refresh_api_keys_list()
+        layout.addStretch(1)
+        return pane
 
-        note = label(
-            "A IA seleciona trechos independentes que atinjam a nota mínima até o limite configurado. "
-            "Os cortes são ajustados automaticamente em pausas naturais da fala.",
-            "Note",
-            wrap=True,
+    def _build_advanced_tab(self) -> QWidget:
+        pane, layout = self._page(
+            "Avançado",
+            "Ajustes técnicos de transcrição, recorte e vídeo. Os padrões funcionam bem na maioria dos casos.",
         )
-        layout.addWidget(note)
+        layout.addWidget(label("Transcrição e recorte", "SectionTitle"))
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(12)
+
+        self.whisper_model = QComboBox()
+        for w_label, w_val in (
+            ("large · máxima precisão", "large"),
+            ("turbo · rápido e preciso", "turbo"),
+            ("medium · equilibrado", "medium"),
+            ("small · leve", "small"),
+            ("base · muito leve", "base"),
+            ("tiny · ultra rápido", "tiny"),
+        ):
+            self.whisper_model.addItem(w_label, w_val)
+        grid.addWidget(
+            _field_box("Modelo de transcrição (Whisper)", self.whisper_model), 0, 0
+        )
+
+        self.pause_gap = QDoubleSpinBox()
+        self.pause_gap.setRange(0.2, 10.0)
+        self.pause_gap.setSingleStep(0.1)
+        self.pause_gap.setDecimals(1)
+        grid.addWidget(
+            _field_box("Pausa natural para corte", self.pause_gap, "0.2 – 10s"),
+            0,
+            1,
+        )
+
+        self.padding_s = QDoubleSpinBox()
+        self.padding_s.setRange(0.0, 30.0)
+        self.padding_s.setSingleStep(0.5)
+        self.padding_s.setDecimals(1)
+        grid.addWidget(
+            _field_box("Margem de segurança (padding)", self.padding_s, "0 – 30s"),
+            1,
+            0,
+        )
+
+        self.max_workers = QSpinBox()
+        self.max_workers.setRange(1, 8)
+        grid.addWidget(
+            _field_box("Renderizações em paralelo", self.max_workers, "1 – 8"),
+            1,
+            1,
+        )
+        layout.addLayout(grid)
+        layout.addWidget(separator())
+
+        video = self._build_video_tab()
+        video.layout().setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(video)
         layout.addStretch(1)
         return pane
 
