@@ -266,7 +266,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(label("ENQUADRAMENTO VERTICAL", "SectionTitle"))
+        layout.addWidget(label("Enquadramento vertical", "SectionTitle"))
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
@@ -303,7 +303,7 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(grid1)
         layout.addWidget(separator())
-        layout.addWidget(label("CODIFICAÇÃO DE VÍDEO", "SectionTitle"))
+        layout.addWidget(label("Codificação de vídeo", "SectionTitle"))
 
         grid2 = QGridLayout()
         grid2.setHorizontalSpacing(14)
@@ -366,7 +366,7 @@ class SettingsDialog(QDialog):
         left.addLayout(top_bar)
 
         left.addWidget(separator())
-        left.addWidget(label("ESTILOS PRONTOS (PRESETS)", "SectionTitle"))
+        left.addWidget(label("Estilos prontos", "SectionTitle"))
 
         self.preset_grid = PresetGrid(VIRAL_PRESETS, columns=3, parent=pane)
         self.preset_grid.preset_selected.connect(self._on_preset_card_selected)
@@ -589,7 +589,7 @@ class SettingsDialog(QDialog):
         preview_layout = QVBoxLayout(preview_box)
         preview_layout.setContentsMargins(12, 12, 12, 12)
         preview_layout.setSpacing(8)
-        preview_layout.addWidget(label("PRÉVIA 9:16", "SectionTitle"))
+        preview_layout.addWidget(label("Prévia 9:16", "SectionTitle"))
         self.preview_widget = PhonePreviewWidget(
             phone_width=156, in_settings=True
         )
@@ -612,7 +612,7 @@ class SettingsDialog(QDialog):
         col.setContentsMargins(0, 0, 8, 0)
         col.setSpacing(12)
 
-        col.addWidget(label("FORMATO DO SHORT", "SectionTitle"))
+        col.addWidget(label("Formato do short", "SectionTitle"))
         col.addWidget(
             label(
                 "Escolha uma vez: todos os próximos cortes saem neste formato.",
@@ -624,7 +624,7 @@ class SettingsDialog(QDialog):
         self.layout_grid.layout_selected.connect(self._on_layout_selected)
         col.addWidget(self.layout_grid)
 
-        col.addWidget(label("ITENS AUXILIARES", "SectionTitle"))
+        col.addWidget(label("Itens auxiliares", "SectionTitle"))
 
         # --- Texto da faixa (so formatos com texto)
         self.text_box = QWidget()
@@ -718,7 +718,7 @@ class SettingsDialog(QDialog):
         pv = QVBoxLayout(preview_box)
         pv.setContentsMargins(12, 12, 12, 12)
         pv.setSpacing(8)
-        pv.addWidget(label("PRÉVIA 9:16", "SectionTitle"))
+        pv.addWidget(label("Prévia 9:16", "SectionTitle"))
         self.format_preview = PhonePreviewWidget(phone_width=156, in_settings=True)
         pv.addWidget(self.format_preview, 0, Qt.AlignHCenter)
         outer.addWidget(preview_box, 0, Qt.AlignTop)
@@ -794,7 +794,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(14)
 
-        layout.addWidget(label("CRITÉRIOS DE SELEÇÃO E IA", "SectionTitle"))
+        layout.addWidget(label("Critérios de seleção (IA)", "SectionTitle"))
 
         grid1 = QGridLayout()
         grid1.setHorizontalSpacing(14)
@@ -843,7 +843,7 @@ class SettingsDialog(QDialog):
 
         layout.addLayout(grid1)
         layout.addWidget(separator())
-        layout.addWidget(label("DURAÇÃO E RECORTE", "SectionTitle"))
+        layout.addWidget(label("Duração e recorte", "SectionTitle"))
 
         grid2 = QGridLayout()
         grid2.setHorizontalSpacing(14)
@@ -909,7 +909,7 @@ class SettingsDialog(QDialog):
         )
         layout.addWidget(self.review_before_render)
         layout.addWidget(separator())
-        layout.addWidget(label("CHAVES DE API (.env)", "SectionTitle"))
+        layout.addWidget(label("Chaves de API (.env)", "SectionTitle"))
 
         self.api_keys_list = QListWidget()
         self.api_keys_list.setMaximumHeight(96)

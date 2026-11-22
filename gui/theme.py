@@ -99,15 +99,6 @@ QToolTip {{
     font-weight: 700;
     color: {TEXT};
 }}
-#BrandTag {{
-    background: {PANEL_2};
-    border: 1px solid {LINE_STRONG};
-    border-radius: 4px;
-    color: {MUTED};
-    font-size: 10px;
-    font-weight: 600;
-    padding: 1px 6px;
-}}
 #NavBar {{
     background: {PANEL};
     border: 1px solid {LINE};
@@ -155,12 +146,6 @@ QPushButton#NavTab:checked {{
 }}
 
 /* ---------- Tipografia e Textos ---------- */
-#Eyebrow {{
-    color: {FAINT};
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.1px;
-}}
 #Title {{
     font-size: 18px;
     font-weight: 700;
@@ -293,7 +278,7 @@ QPushButton {{
 }}
 QPushButton:hover {{
     background: {PANEL_3};
-    border-color: #434C63;
+    border-color: #4A4A4A;
 }}
 QPushButton:disabled {{
     color: {FAINT};
@@ -330,9 +315,9 @@ QPushButton#ProcessButton:hover {{
     border-color: {ACCENT_HOVER};
 }}
 QPushButton#ProcessButton:disabled {{
-    background: {ACCENT_SOFT};
-    border: 1px dashed {LINE_ACCENT};
-    color: {MUTED};
+    background: {PANEL_2};
+    border: 1px solid {LINE};
+    color: {FAINT};
 }}
 QPushButton#Ghost {{
     background: {PANEL_2};
@@ -344,7 +329,7 @@ QPushButton#Ghost {{
 }}
 QPushButton#Ghost:hover {{
     background: {PANEL_3};
-    border-color: #434C63;
+    border-color: #4A4A4A;
 }}
 QPushButton#IconBtn {{
     background: {PANEL_2};
@@ -477,8 +462,8 @@ QProgressBar::chunk {{
     background: {WARNING_SOFT};
 }}
 #Step[state="done"] {{
-    border-color: rgba(16, 185, 129, 0.35);
-    background: rgba(16, 185, 129, 0.06);
+    border-color: rgba(34, 197, 94, 0.35);
+    background: {BG_2};
 }}
 #Step[state="error"] {{
     border-color: {DANGER};
@@ -591,16 +576,16 @@ QPlainTextEdit#Log {{
 #ClipScore {{
     background: {SUCCESS_SOFT};
     color: {SUCCESS};
-    border: 1px solid rgba(16, 185, 129, 0.35);
+    border: 1px solid rgba(34, 197, 94, 0.35);
     border-radius: 4px;
     font-weight: 700;
     font-size: 11px;
     padding: 2px 6px;
 }}
 #ClipScore[tier="mid"] {{
-    background: {ACCENT_SOFT};
-    color: #60A5FA;
-    border: 1px solid rgba(37, 99, 235, 0.35);
+    background: {PANEL_2};
+    color: {MUTED};
+    border: 1px solid {LINE_STRONG};
 }}
 #ClipTime {{
     color: {FAINT};
@@ -613,8 +598,6 @@ QPlainTextEdit#Log {{
     color: {TEXT};
 }}
 #ClipHook {{
-    border-left: 2px solid {ACCENT};
-    padding-left: 8px;
     color: {MUTED};
     font-size: 12px;
 }}
@@ -721,10 +704,9 @@ QPushButton#ProjectHeaderBtn:hover {{
     border-radius: 8px;
 }}
 #SectionTitle {{
-    color: {FAINT};
-    font-size: 10px;
+    color: {TEXT};
+    font-size: 12px;
     font-weight: 600;
-    letter-spacing: 0.8px;
     padding-top: 2px;
 }}
 #Note {{

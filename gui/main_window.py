@@ -194,7 +194,6 @@ class MainWindow(QMainWindow):
         brand = QLabel("AutoCortes")
         brand.setObjectName("Brand")
         layout.addWidget(brand)
-        layout.addWidget(label("BR", "BrandTag"))
 
         layout.addSpacing(18)
 
@@ -585,7 +584,7 @@ class MainWindow(QMainWindow):
         preview_col = QVBoxLayout()
         preview_col.setSpacing(6)
         preview_head = QHBoxLayout()
-        preview_head.addWidget(label("PRÉVIA", "SectionTitle"))
+        preview_head.addWidget(label("Prévia", "SectionTitle"))
         preview_head.addStretch(1)
         self.preview_ratio = label("9:16", "MiniPill")
         preview_head.addWidget(self.preview_ratio)
@@ -611,7 +610,7 @@ class MainWindow(QMainWindow):
         buttons_row = QHBoxLayout()
         buttons_row.setSpacing(8)
 
-        self.process_button = QPushButton("▶   Processar vídeo")
+        self.process_button = QPushButton("Processar vídeo")
         self.process_button.setObjectName("ProcessButton")
         self.process_button.setCursor(Qt.PointingHandCursor)
         self.process_button.clicked.connect(self.process)
@@ -1270,7 +1269,7 @@ class MainWindow(QMainWindow):
         self.focus_input.setReadOnly(busy)
         self.source_tabs.setEnabled(not busy)
         self.process_button.setText(
-            "Processando..." if busy else "▶   Processar vídeo"
+            "Processando..." if busy else "Processar vídeo"
         )
         if busy:
             self._set_header_status("Processando...", "busy")

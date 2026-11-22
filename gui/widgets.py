@@ -122,13 +122,6 @@ def flash_button(button, text: str, ms: int = 1400) -> None:
     QTimer.singleShot(ms, restore)
 
 
-def eyebrow(text: str) -> QLabel:
-    """Rótulo de seção compacto em caixa alta, sem ornamentos decorativos."""
-    lbl = QLabel(text.upper())
-    lbl.setObjectName("Eyebrow")
-    return lbl
-
-
 def separator() -> QFrame:
     line = QFrame()
     line.setObjectName("Separator")
@@ -221,7 +214,7 @@ class Switch(QAbstractButton):
         enabled = self.isEnabled()
 
         track = QRectF(0, (self.height() - 18) / 2, 32, 18)
-        off = QColor("#282E3B")
+        off = QColor(theme.LINE_STRONG)
         on = QColor(theme.ACCENT)
         color = QColor(
             int(off.red() + (on.red() - off.red()) * self._offset),
@@ -445,7 +438,7 @@ class PhonePreviewWidget(QWidget):
         stage_rect = QRectF(0.5, 0.5, self.width() - 1, self.height() - 1)
         stage_path = QPainterPath()
         stage_path.addRoundedRect(stage_rect, 8, 8)
-        painter.fillPath(stage_path, QColor("#111318"))
+        painter.fillPath(stage_path, QColor(theme.BG))
         painter.setPen(QPen(QColor(theme.LINE), 1))
         painter.drawPath(stage_path)
 
@@ -502,13 +495,7 @@ class PhonePreviewWidget(QWidget):
             painter.drawPath(phone_path)
             return
 
-        bg_grad = QLinearGradient(
-            phone_rect.topLeft(), phone_rect.bottomLeft()
-        )
-        bg_grad.setColorAt(0.0, _adj(QColor("#1D222D")))
-        bg_grad.setColorAt(0.5, _adj(QColor("#252B38")))
-        bg_grad.setColorAt(1.0, _adj(QColor("#14171F")))
-        painter.fillRect(phone_rect, bg_grad)
+        painter.fillRect(phone_rect, _adj(QColor(theme.PANEL_2)))
 
         # Faixas superior/inferior representando o fundo desfocado (blur)
         crop_h = min(ph, (pw * 9 / 16) * max(1.0, float(opts.zoom) * 0.85))
@@ -586,10 +573,7 @@ class PhonePreviewWidget(QWidget):
         painter.drawImage(rect, image, QRectF(sx, sy, sw, sh))
 
     def _draw_placeholder(self, painter: QPainter, rect: QRectF, label_text: str = ""):
-        grad = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        grad.setColorAt(0.0, QColor("#2A2A2A"))
-        grad.setColorAt(1.0, QColor("#1A1A1A"))
-        painter.fillRect(rect, grad)
+        painter.fillRect(rect, QColor(theme.PANEL_2))
         r = min(rect.width(), rect.height()) * 0.16
         cx, cy = rect.center().x(), rect.center().y()
         painter.setPen(Qt.NoPen)
@@ -862,7 +846,7 @@ class PresetCard(QFrame):
 
         if s_cfg.get("caption_glow"):
             sample.setStyleSheet(
-                f"background-color: #0F1115; color: #FFFFFF; "
+                f"background-color: {theme.BG}; color: #FFFFFF; "
                 f"font-family: '{font_family}'; font-weight: 900; font-size: 12px; "
                 "border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 5px; padding: 2px 6px;"
             )
@@ -874,9 +858,9 @@ class PresetCard(QFrame):
                 "border-radius: 5px; padding: 2px 6px;"
             )
         else:
-            hl = readable_text_on("#12151C", hl)
+            hl = readable_text_on(theme.BG, hl)
             sample.setStyleSheet(
-                f"background-color: #12151C; color: {hl}; "
+                f"background-color: {theme.BG}; color: {hl}; "
                 f"font-family: '{font_family}'; font-weight: 800; font-size: 12px; "
                 f"border: 1px solid {theme.LINE}; border-radius: 5px; padding: 2px 6px;"
             )
@@ -899,7 +883,7 @@ class PresetCard(QFrame):
             self.setStyleSheet(
                 "QFrame#PresetCard { "
                 f"background-color: {theme.ACCENT_SOFT}; "
-                f"border: 1.5px solid {theme.ACCENT}; "
+                f"border: 1px solid {theme.ACCENT}; "
                 "border-radius: 6px; } "
                 "QFrame#PresetCard:focus { "
                 f"border: 2px solid {theme.ACCENT_TEXT}; }}"
